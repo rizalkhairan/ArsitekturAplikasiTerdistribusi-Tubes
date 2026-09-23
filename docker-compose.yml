@@ -1,0 +1,12 @@
+services:
+  pvmbg:
+    build: ./services/pvmbg
+    env_file:
+      - ./services/pvmbg/.env
+    ports:
+      - "8082:8082"
+    volumes:
+      - pvmbg-data:/app/data
+
+volumes:
+  pvmbg-data:
