@@ -1,4 +1,13 @@
 services:
+  bmkg:
+    build: ./services/bmkg
+    env_file:
+      - ./services/bmkg/.env
+    ports:
+      - "8081:8081"
+    volumes:
+      - bmkg-data:/app/data
+
   pvmbg:
     build: ./services/pvmbg
     env_file:
@@ -9,4 +18,5 @@ services:
       - pvmbg-data:/app/data
 
 volumes:
+  bmkg-data:
   pvmbg-data:

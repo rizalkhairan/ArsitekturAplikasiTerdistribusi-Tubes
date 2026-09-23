@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package bmkg;
+
+option go_package = "github.com/rizalkhairan/distributed-system/bmkg/proto";
+
+service BMKG {
+  rpc GetSeismicEvents(GetSeismicEventsRequest)
+      returns (GetSeismicEventsResponse);
+
+  rpc GetTsunamiWarnings(GetTsunamiWarningsRequest)
+      returns (GetTsunamiWarningsResponse);
+
+  rpc Health(HealthRequest)
+      returns (HealthResponse);
+}
+
+message GetSeismicEventsRequest {
+  string since = 1;
+}
+
+message GetTsunamiWarningsRequest {
+  string since = 1;
+}
+
+message SeismicEvent {
+  string event_id = 1;
+  double magnitude = 2;
+  double depth_km = 3;
+  double epicenter_lat = 4;
+  double epicenter_lon = 5;
+  string region_name = 6;
+  string occurred_at = 7;
+  bool potential_tsunami = 8;
+}
+
+message TsunamiWarning {
+  string warning_id = 1;
+  string related_event_id = 2;
+  string threat_level = 3;
+  repeated string affected_zones = 4;
+  string estimated_arrival = 5;
+}
+
+message GetSeismicEventsResponse {
+  repeated SeismicEvent events = 1;
+}
+
+message GetTsunamiWarningsResponse {
+  repeated TsunamiWarning warnings = 1;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+}
