@@ -1,4 +1,16 @@
 services:
+  bnpb:
+    build:
+      context: ./services
+      dockerfile: bnpb/Dockerfile
+    env_file:
+      - ./services/bnpb/.env
+    volumes:
+      - bnpb-data:/app/data
+    depends_on:
+      - bmkg
+      - pvmbg
+
   bmkg:
     build: ./services/bmkg
     env_file:
@@ -18,5 +30,6 @@ services:
       - pvmbg-data:/app/data
 
 volumes:
+  bnpb-data:
   bmkg-data:
   pvmbg-data:

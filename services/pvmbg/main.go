@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,20 +9,16 @@ import (
 	"os"
 	"strconv"
 	"time"
-
-	_ "modernc.org/sqlite"
 )
 
 type VolcanicReport struct {
-	ReportID           string    `json:"report_id"`
-	VolcanoID          string    `json:"volcano_id"`
-	AlertLevel         string    `json:"alert_level"`
-	EruptionCount24h   int       `json:"eruption_count_24h"`
-	AshColumnHeightM   float64   `json:"ash_column_height_m"`
-	ReportedAt         time.Time `json:"reported_at"`
+	ReportID         string    `json:"report_id"`
+	VolcanoID        string    `json:"volcano_id"`
+	AlertLevel       string    `json:"alert_level"`
+	EruptionCount24h int       `json:"eruption_count_24h"`
+	AshColumnHeightM float64   `json:"ash_column_height_m"`
+	ReportedAt       time.Time `json:"reported_at"`
 }
-
-var db *sql.DB
 
 var outage bool
 var schemaVersion bool
@@ -40,16 +35,13 @@ func main() {
 		dbPath = "/app/data/pvmbg.db"
 	}
 
-	os.MkdirAll("/app/data", 0755)
-
 	var err error
-	db, err = sql.Open("sqlite", dbPath)
+	db, err = openDatabase(dbPath)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 
-	initDatabase()
 	seedReports()
 
 	go generateReports()
@@ -63,31 +55,11 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
-func initDatabase() {
-	_, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS volcanic_reports (
-			report_id TEXT PRIMARY KEY,
-			volcano_id TEXT,
-			alert_level TEXT,
-			eruption_count_24h INTEGER,
-			ash_column_height_m REAL,
-			reported_at TEXT
-		)
-	`)
-
+func seedReports() {
+	count, err := countReports()
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	log.Println("SQLite initialized")
-}
-
-func seedReports() {
-	var count int
-
-	db.QueryRow(
-		"SELECT COUNT(*) FROM volcanic_reports",
-	).Scan(&count)
 
 	if count >= 20 {
 		return
@@ -111,40 +83,15 @@ func seedReports() {
 	log.Println("20 historical reports created")
 }
 
-func insertReport(report VolcanicReport) {
-	_, err := db.Exec(`
-		INSERT INTO volcanic_reports (
-			report_id,
-			volcano_id,
-			alert_level,
-			eruption_count_24h,
-			ash_column_height_m,
-			reported_at
-		)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`,
-		report.ReportID,
-		report.VolcanoID,
-		report.AlertLevel,
-		report.EruptionCount24h,
-		report.AshColumnHeightM,
-		report.ReportedAt.Format(time.RFC3339),
-	)
-
-	if err != nil {
-		log.Println(err)
-	}
-}
-
 func generateReports() {
 	ticker := time.NewTicker(10 * time.Second)
 
 	for range ticker.C {
-		var count int
-
-		db.QueryRow(
-			"SELECT COUNT(*) FROM volcanic_reports",
-		).Scan(&count)
+		count, err := countReports()
+		if err != nil {
+			log.Println(err)
+			continue
+		}
 
 		report := VolcanicReport{
 			ReportID:         fmt.Sprintf("pvmbg-%03d", count+1),
@@ -228,49 +175,10 @@ func volcanicReports(w http.ResponseWriter, r *http.Request) {
 
 	since := r.URL.Query().Get("since")
 
-	query := `
-		SELECT
-			report_id,
-			volcano_id,
-			alert_level,
-			eruption_count_24h,
-			ash_column_height_m,
-			reported_at
-		FROM volcanic_reports
-	`
-
-	if since != "" {
-		query += " WHERE reported_at >= '" + since + "'"
-	}
-
-	query += " ORDER BY reported_at ASC"
-
-	rows, err := db.Query(query)
+	reports, err := listVolcanicReports(r.Context(), since)
 	if err != nil {
 		http.Error(w, "database error", http.StatusInternalServerError)
 		return
-	}
-
-	defer rows.Close()
-
-	var reports []VolcanicReport
-
-	for rows.Next() {
-		var report VolcanicReport
-		var reportedAt string
-
-		rows.Scan(
-			&report.ReportID,
-			&report.VolcanoID,
-			&report.AlertLevel,
-			&report.EruptionCount24h,
-			&report.AshColumnHeightM,
-			&reportedAt,
-		)
-
-		report.ReportedAt, _ = time.Parse(time.RFC3339, reportedAt)
-
-		reports = append(reports, report)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -285,7 +193,7 @@ func volcanicReports(w http.ResponseWriter, r *http.Request) {
 
 		for _, report := range reports {
 			response = append(response, NewReport{
-				VolcanicReport:   report,
+				VolcanicReport:  report,
 				ConfidenceLevel: 0.90 + rand.Float64()*0.10,
 			})
 		}
