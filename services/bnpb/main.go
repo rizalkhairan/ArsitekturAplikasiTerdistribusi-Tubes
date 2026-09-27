@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/rizalkhairan/distributed-system/bnpb/internal/api"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/communication"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/database"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/processing"
@@ -43,7 +45,24 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Start HTTP read API for Client-Facing API
+	readAPI := api.NewServer(":"+cfg.APIPort, db, cfg.InternalAPIKey)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := readAPI.Start(); err != nil && err != http.ErrServerClosed {
+			log.Printf("BNPB read API error: %v", err)
+		}
+	}()
+
 	startPoll(ctx, cfg.PollInterval, db, sources)
+
+	// Graceful shutdown
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	readAPI.Shutdown(shutdownCtx)
+	wg.Wait()
 }
 
 func startPoll(ctx context.Context, interval time.Duration, db *sql.DB, sources *communication.Clients) {

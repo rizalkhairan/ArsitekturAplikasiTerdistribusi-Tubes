@@ -11,6 +11,7 @@ import (
 )
 
 type HazardEvent struct {
+	HazardID    string
 	Source      string
 	SourceRefID string
 	HazardType  string
@@ -19,6 +20,7 @@ type HazardEvent struct {
 	Latitude    float64
 	Longitude   float64
 	OccurredAt  time.Time
+	IngestedAt  time.Time
 	Attributes  map[string]any
 }
 
@@ -111,6 +113,84 @@ func FindHazard(ctx context.Context, db *sql.DB, source, refID string) (HazardEv
 	}
 	event.OccurredAt, err = time.Parse(time.RFC3339Nano, occurredAt)
 	if err != nil {
+		return event, err
+	}
+	err = json.Unmarshal([]byte(attributes), &event.Attributes)
+	return event, err
+}
+
+// ListHazards returns canonical events with optional filters.
+func ListHazards(ctx context.Context, db *sql.DB, source, severity, since string, limit int) ([]HazardEvent, error) {
+	query := `
+		SELECT hazard_id, source, source_ref_id, hazard_type, severity, area_name,
+		       latitude, longitude, occurred_at, ingested_at, attributes
+		FROM hazard_events WHERE 1=1`
+	var args []any
+	if source != "" {
+		query += " AND source = ?"
+		args = append(args, source)
+	}
+	if severity != "" {
+		query += " AND severity = ?"
+		args = append(args, severity)
+	}
+	if since != "" {
+		query += " AND occurred_at >= ?"
+		args = append(args, since)
+	}
+	query += " ORDER BY occurred_at DESC"
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var events []HazardEvent
+	for rows.Next() {
+		var event HazardEvent
+		var occurredAt, ingestedAt, attributes string
+		if err := rows.Scan(&event.HazardID, &event.Source, &event.SourceRefID,
+			&event.HazardType, &event.Severity, &event.AreaName,
+			&event.Latitude, &event.Longitude, &occurredAt, &ingestedAt,
+			&attributes); err != nil {
+			return nil, err
+		}
+		if event.OccurredAt, err = time.Parse(time.RFC3339Nano, occurredAt); err != nil {
+			return nil, err
+		}
+		if event.IngestedAt, err = time.Parse(time.RFC3339Nano, ingestedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(attributes), &event.Attributes); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
+// GetHazard retrieves a single canonical event by hazard_id.
+func GetHazard(ctx context.Context, db *sql.DB, hazardID string) (HazardEvent, error) {
+	var event HazardEvent
+	var occurredAt, ingestedAt, attributes string
+	err := db.QueryRowContext(ctx, `
+		SELECT hazard_id, source, source_ref_id, hazard_type, severity, area_name,
+		       latitude, longitude, occurred_at, ingested_at, attributes
+		FROM hazard_events WHERE hazard_id = ?
+	`, hazardID).Scan(&event.HazardID, &event.Source, &event.SourceRefID,
+		&event.HazardType, &event.Severity, &event.AreaName,
+		&event.Latitude, &event.Longitude, &occurredAt, &ingestedAt,
+		&attributes)
+	if err != nil {
+		return event, err
+	}
+	if event.OccurredAt, err = time.Parse(time.RFC3339Nano, occurredAt); err != nil {
+		return event, err
+	}
+	if event.IngestedAt, err = time.Parse(time.RFC3339Nano, ingestedAt); err != nil {
 		return event, err
 	}
 	err = json.Unmarshal([]byte(attributes), &event.Attributes)

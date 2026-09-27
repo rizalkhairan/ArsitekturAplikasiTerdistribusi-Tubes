@@ -1,16 +1,4 @@
 services:
-  bnpb:
-    build:
-      context: ./services
-      dockerfile: bnpb/Dockerfile
-    env_file:
-      - ./services/bnpb/.env
-    volumes:
-      - bnpb-data:/app/data
-    depends_on:
-      - bmkg
-      - pvmbg
-
   bmkg:
     build: ./services/bmkg
     env_file:
@@ -29,7 +17,65 @@ services:
     volumes:
       - pvmbg-data:/app/data
 
+  bnpb:
+    build:
+      context: ./services
+      dockerfile: bnpb/Dockerfile
+    env_file:
+      - ./services/bnpb/.env
+    ports:
+      - "8085:8085"
+    volumes:
+      - bnpb-data:/app/data
+    depends_on:
+      - bmkg
+      - pvmbg
+
+  casdoor:
+    image: casbin/casdoor:latest
+    ports:
+      - "8000:8000"
+    environment:
+      driverName: postgres
+      dataSourceName: postgres://casdoor:${CASDOOR_DB_PASSWORD}@casdoor-db:5432/casdoor?sslmode=disable
+      initDataFile: /app/init_data.json
+    volumes:
+      - ./services/casdoor/init_data.json:/app/init_data.json
+    depends_on:
+      casdoor-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  casdoor-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: casdoor
+      POSTGRES_PASSWORD: ${CASDOOR_DB_PASSWORD}
+      POSTGRES_DB: casdoor
+    volumes:
+      - casdoor-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U casdoor"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  client-api:
+    build: ./services/client-api
+    ports:
+      - "9080:8080"
+    env_file:
+      - ./services/client-api/.env
+    depends_on:
+      - bnpb
+      - casdoor
+
 volumes:
-  bnpb-data:
   bmkg-data:
   pvmbg-data:
+  bnpb-data:
+  casdoor-pgdata:

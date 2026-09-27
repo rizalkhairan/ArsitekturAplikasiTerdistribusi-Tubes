@@ -2,10 +2,13 @@ package communication
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	pb "github.com/rizalkhairan/distributed-system/bmkg/proto"
+	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -24,12 +27,49 @@ func newBMKGClient(address, key string, timeout time.Duration) (*BMKGClient, err
 			ctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			ctx = metadata.AppendToOutgoingContext(ctx, "x-bmkg-key", key)
-			return invoker(ctx, method, req, reply, cc, opts...)
+
+			// Propagate correlation ID
+			corrID := getCorrelationIDFromContext(ctx)
+			if corrID == "" {
+				corrID = uuid.NewString()
+			}
+			ctx = metadata.AppendToOutgoingContext(ctx, "x-correlation-id", corrID)
+
+			// Log latency
+			start := time.Now()
+			err := invoker(ctx, method, req, reply, cc, opts...)
+			latency := time.Since(start)
+			logStructured(map[string]any{
+				"ts":         start.Format(time.RFC3339Nano),
+				"corr_id":    corrID,
+				"method":     method,
+				"status":     200,
+				"latency_ms": latency.Milliseconds(),
+				"upstream":   "bmkg",
+			})
+			return err
 		}))
 	if err != nil {
 		return nil, err
 	}
 	return &BMKGClient{conn: conn, api: pb.NewBMKGClient(conn)}, nil
+}
+
+func getCorrelationIDFromContext(ctx context.Context) string {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if ids := md.Get("x-correlation-id"); len(ids) > 0 {
+			return ids[0]
+		}
+	}
+	return ""
+}
+
+func logStructured(data map[string]any) {
+	b, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+	log.Print(string(b))
 }
 
 func (c *BMKGClient) Close() error {

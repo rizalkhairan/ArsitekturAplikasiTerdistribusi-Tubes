@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type PVMBGClient struct {
@@ -32,11 +34,43 @@ func (c *PVMBGClient) get(ctx context.Context, path string, out any) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/json")
+
+	// Propagate correlation ID
+	corrID := getCorrelationIDFromContext(ctx)
+	if corrID == "" {
+		corrID = uuid.NewString()
+	}
+	req.Header.Set("X-Correlation-ID", corrID)
+
+	// Log latency
+	start := time.Now()
 	response, err := c.http.Do(req)
+	latency := time.Since(start)
 	if err != nil {
+		logStructured(map[string]any{
+			"ts":         start.Format(time.RFC3339Nano),
+			"corr_id":    corrID,
+			"method":     "GET",
+			"path":       path,
+			"status":     0,
+			"latency_ms": latency.Milliseconds(),
+			"upstream":   "pvmbg",
+			"error":      err.Error(),
+		})
 		return fmt.Errorf("PVMBG request: %w", err)
 	}
 	defer response.Body.Close()
+
+	logStructured(map[string]any{
+		"ts":         start.Format(time.RFC3339Nano),
+		"corr_id":    corrID,
+		"method":     "GET",
+		"path":       path,
+		"status":     response.StatusCode,
+		"latency_ms": latency.Milliseconds(),
+		"upstream":   "pvmbg",
+	})
+
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("PVMBG returned HTTP %d", response.StatusCode)
 	}

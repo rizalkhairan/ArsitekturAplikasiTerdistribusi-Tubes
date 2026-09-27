@@ -4,3 +4,17 @@
 *.db
 *.db-shm
 *.db-wal
+*/go.sum
+*/*/go.sum
+*/*.exe
+*/*/*.exe
+
+# Java / Maven
+client/target/
+*.class
+*.jar
+!client/pom.xml
+.idea/
+*.iml
+.vscode/
+*.log

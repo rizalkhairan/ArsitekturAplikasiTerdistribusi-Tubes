@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
@@ -94,14 +95,68 @@ func authInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, h
 		return handler(ctx, req)
 	}
 
+	start := time.Now()
 	md, _ := metadata.FromIncomingContext(ctx)
+
+	// Get or generate correlation ID
+	corrID := getCorrelationIDFromMetadata(md)
+	if corrID == "" {
+		corrID = generateCorrelationID()
+	}
+	ctx = metadata.AppendToOutgoingContext(ctx, "x-correlation-id", corrID)
+
+	// Auth check
 	keys := md.Get("x-bmkg-key")
 	if len(keys) == 0 || keys[0] == "" || keys[0] != os.Getenv("BMKG_API_KEY") {
+		latency := time.Since(start)
+		logStructured(map[string]any{
+			"ts":         start.Format(time.RFC3339Nano),
+			"corr_id":    corrID,
+			"method":     info.FullMethod,
+			"status":     401,
+			"latency_ms": latency.Milliseconds(),
+			"error":      "unauthorized",
+		})
 		return nil, status.Error(codes.Unauthenticated, "invalid BMKG key")
 	}
 
 	time.Sleep(time.Duration(50+rand.Intn(101)) * time.Millisecond) // Delay sim
-	return handler(ctx, req)
+	resp, err := handler(ctx, req)
+
+	latency := time.Since(start)
+	logStatus := 200
+	if err != nil {
+		logStatus = 500
+	}
+	logStructured(map[string]any{
+		"ts":         start.Format(time.RFC3339Nano),
+		"corr_id":    corrID,
+		"method":     info.FullMethod,
+		"status":     logStatus,
+		"latency_ms": latency.Milliseconds(),
+	})
+
+	return resp, err
+}
+
+func generateCorrelationID() string {
+	return fmt.Sprintf("bmkg-%d", time.Now().UnixNano())
+}
+
+func logStructured(data map[string]any) {
+	b, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+	log.Print(string(b))
+}
+
+func getCorrelationIDFromMetadata(md metadata.MD) string {
+	ids := md.Get("x-correlation-id")
+	if len(ids) > 0 && ids[0] != "" {
+		return ids[0]
+	}
+	return ""
 }
 
 func (s *server) Health(ctx context.Context, req *pb.HealthRequest) (*pb.HealthResponse, error) {
