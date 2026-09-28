@@ -1,4 +1,45 @@
 services:
+  kafka:
+    image: apache/kafka:3.9.0
+    hostname: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  topic-init:
+    image: apache/kafka:3.9.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - >-
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists
+        --topic hazard-events --partitions 3 --replication-factor 1 --config retention.ms=604800000 &&
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists
+        --topic hazard-events-dlq --partitions 1 --replication-factor 1 --config retention.ms=604800000
+
   bnpb:
     build:
       context: ./services
@@ -7,9 +48,83 @@ services:
       - ./services/bnpb/.env
     volumes:
       - bnpb-data:/app/data
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/health > /dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     depends_on:
-      - bmkg
-      - pvmbg
+      kafka:
+        condition: service_healthy
+      topic-init:
+        condition: service_completed_successfully
+      bmkg:
+        condition: service_started
+      pvmbg:
+        condition: service_started
+
+  dashboard-updater:
+    build: ./services/dashboard-updater
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_HAZARD_EVENTS: hazard-events
+      KAFKA_DLQ_TOPIC: hazard-events-dlq
+      HEALTH_ADDR: :8080
+    ports:
+      - "8091:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/health > /dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+
+  notifier:
+    build: ./services/notifier
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_HAZARD_EVENTS: hazard-events
+      KAFKA_DLQ_TOPIC: hazard-events-dlq
+      HEALTH_ADDR: :8080
+      NOTIFIER_PROCESSING_DELAY: 0s
+    ports:
+      - "8092:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/health > /dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+
+  # This deploys independently; BNPB is unaware of this consumer.
+  analytics-consumer:
+    build: ./services/analytics-consumer
+    profiles: ["analytics"]
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_HAZARD_EVENTS: hazard-events
+      KAFKA_DLQ_TOPIC: hazard-events-dlq
+      HEALTH_ADDR: :8080
+    ports:
+      - "8093:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/health > /dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
 
   bmkg:
     build: ./services/bmkg
@@ -30,6 +145,7 @@ services:
       - pvmbg-data:/app/data
 
 volumes:
+  kafka-data:
   bnpb-data:
   bmkg-data:
   pvmbg-data:

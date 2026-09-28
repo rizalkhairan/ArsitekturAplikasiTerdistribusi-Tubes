@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/communication"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/database"
+	"github.com/rizalkhairan/distributed-system/bnpb/internal/messaging"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/processing"
 )
 
@@ -39,17 +41,57 @@ func main() {
 	}
 	defer sources.Close()
 
-	log.Println("BNPB database and communication clients initialized")
+	publisher, err := messaging.NewKafkaPublisher(cfg.KafkaBrokers, cfg.KafkaClientID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer publisher.Close()
+
+	log.Printf("BNPB initialized kafka_topic=%s kafka_client_id=%s", cfg.KafkaTopic, cfg.KafkaClientID)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	startPoll(ctx, cfg.PollInterval, db, sources)
+	var workers sync.WaitGroup
+	workers.Go(func() { startPoll(ctx, cfg.PollInterval, cfg.KafkaTopic, db, sources) })
+	workers.Go(func() {
+		messaging.OutboxPublisher{
+			DB: db, Publisher: publisher, RetryLimit: cfg.KafkaPublishRetryLimit,
+			RetryBackoff: cfg.KafkaPublishRetryBackoff, PollInterval: cfg.OutboxPollInterval,
+		}.Run(ctx)
+	})
+	workers.Go(func() { serveHealth(ctx, cfg.HealthAddress) })
+	workers.Wait()
 }
 
-func startPoll(ctx context.Context, interval time.Duration, db *sql.DB, sources *communication.Clients) {
+func serveHealth(ctx context.Context, address string) {
+	server := &http.Server{
+		Addr: address,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/health" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		}),
+	}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("health server shutdown failed: %v", err)
+		}
+	}()
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Printf("health server failed: %v", err)
+	}
+}
+
+func startPoll(ctx context.Context, interval time.Duration, topic string, db *sql.DB, sources *communication.Clients) {
 	var pollers sync.WaitGroup
 	pollers.Go(func() {
-		pollSource(ctx, "BMKG", interval, db, func(ctx context.Context, cursors database.Cursors) (processing.Batch, error) {
+		pollSource(ctx, "BMKG", interval, topic, db, func(ctx context.Context, cursors database.Cursors) (processing.Batch, error) {
 			events, err := sources.BMKG.SeismicEvents(ctx, cursors[database.SeismicFeed])
 			if err != nil {
 				return processing.Batch{}, err
@@ -62,7 +104,7 @@ func startPoll(ctx context.Context, interval time.Duration, db *sql.DB, sources 
 		})
 	})
 	pollers.Go(func() {
-		pollSource(ctx, "PVMBG", interval, db, func(ctx context.Context, cursors database.Cursors) (processing.Batch, error) {
+		pollSource(ctx, "PVMBG", interval, topic, db, func(ctx context.Context, cursors database.Cursors) (processing.Batch, error) {
 			reports, err := sources.PVMBG.VolcanicReports(ctx, cursors[database.VolcanicFeed])
 			if err != nil {
 				return processing.Batch{}, err
@@ -77,6 +119,7 @@ func pollSource(
 	ctx context.Context,
 	source string,
 	interval time.Duration,
+	topic string,
 	db *sql.DB,
 	fetchAndAggregate func(context.Context, database.Cursors) (processing.Batch, error),
 ) {
@@ -91,7 +134,7 @@ func pollSource(
 		// Save hazards and advance only this source's cursors in one transaction.
 		if err == nil {
 			var stored int
-			stored, err = database.SaveHazards(ctx, db, batch.Hazards, batch.Cursors)
+			stored, err = database.SaveHazards(ctx, db, batch.Hazards, batch.Cursors, topic)
 			if err == nil {
 				log.Printf("%s: stored %d canonical events", source, stored)
 			}
