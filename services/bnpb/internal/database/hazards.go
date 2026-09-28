@@ -22,15 +22,16 @@ type HazardEvent struct {
 	Attributes  map[string]any
 }
 
-// SaveHazards commits the entire batch and its cursors together.
-func SaveHazards(ctx context.Context, db *sql.DB, events []HazardEvent, cursors Cursors) (int, error) {
+// SaveHazards commits the entire batch, its new-event outbox records, and cursors together.
+// An existing source record is updated but deliberately does not emit another event.
+func SaveHazards(ctx context.Context, db *sql.DB, events []HazardEvent, cursors Cursors, topic string) (int, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
 	for _, event := range events {
-		if err := saveHazard(ctx, tx, event); err != nil {
+		if err := saveHazard(ctx, tx, event, topic); err != nil {
 			return 0, fmt.Errorf("%s %s: %w", event.Source, event.SourceRefID, err)
 		}
 	}
@@ -49,7 +50,7 @@ func SaveHazards(ctx context.Context, db *sql.DB, events []HazardEvent, cursors 
 }
 
 // Keep the original UUIDv7 and first ingestion time on repeated polls.
-func saveHazard(ctx context.Context, tx *sql.Tx, event HazardEvent) error {
+func saveHazard(ctx context.Context, tx *sql.Tx, event HazardEvent, topic string) error {
 	if event.SourceRefID == "" || event.OccurredAt.IsZero() {
 		return fmt.Errorf("source identifier and event time are required")
 	}
@@ -61,23 +62,68 @@ func saveHazard(ctx context.Context, tx *sql.Tx, event HazardEvent) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `
+	ingestedAt := time.Now().UTC()
+	result, err := tx.ExecContext(ctx, `
 		INSERT INTO hazard_events (
 			hazard_id, source, source_ref_id, hazard_type, severity, area_name,
 			latitude, longitude, occurred_at, ingested_at, attributes
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (source, source_ref_id) DO UPDATE SET
-			hazard_type = excluded.hazard_type,
-			severity = excluded.severity,
-			area_name = excluded.area_name,
-			latitude = excluded.latitude,
-			longitude = excluded.longitude,
-			occurred_at = excluded.occurred_at,
-			attributes = excluded.attributes
+		ON CONFLICT (source, source_ref_id) DO NOTHING
 	`, id.String(), event.Source, event.SourceRefID, event.HazardType,
 		event.Severity, event.AreaName, event.Latitude, event.Longitude,
 		event.OccurredAt.UTC().Format(time.RFC3339Nano),
-		time.Now().UTC().Format(time.RFC3339Nano), string(attributes))
+		ingestedAt.Format(time.RFC3339Nano), string(attributes))
+	if err != nil {
+		return err
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if inserted == 0 {
+		_, err = tx.ExecContext(ctx, `
+			UPDATE hazard_events SET
+				hazard_type = ?, severity = ?, area_name = ?, latitude = ?, longitude = ?,
+				occurred_at = ?, attributes = ?
+			WHERE source = ? AND source_ref_id = ?
+		`, event.HazardType, event.Severity, event.AreaName, event.Latitude, event.Longitude,
+			event.OccurredAt.UTC().Format(time.RFC3339Nano), string(attributes),
+			event.Source, event.SourceRefID)
+		return err
+	}
+
+	correlationID, err := uuid.NewV7()
+	if err != nil {
+		return err
+	}
+	eventID, err := uuid.NewV7()
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]any{
+		"event_id":       eventID.String(),
+		"hazard_id":      id.String(),
+		"source":         event.Source,
+		"source_ref_id":  event.SourceRefID,
+		"hazard_type":    event.HazardType,
+		"severity":       event.Severity,
+		"area_name":      event.AreaName,
+		"latitude":       event.Latitude,
+		"longitude":      event.Longitude,
+		"occurred_at":    event.OccurredAt.UTC().Format(time.RFC3339Nano),
+		"ingested_at":    ingestedAt.Format(time.RFC3339Nano),
+		"attributes":     event.Attributes,
+		"correlation_id": correlationID.String(),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO outbox_events (
+			event_id, hazard_id, correlation_id, topic, payload, created_at
+		) VALUES (?, ?, ?, ?, ?, ?)
+	`, eventID.String(), id.String(), correlationID.String(), topic, string(payload),
+		ingestedAt.Format(time.RFC3339Nano))
 	return err
 }
 

@@ -35,6 +35,22 @@ CREATE TABLE IF NOT EXISTS hazard_events (
 CREATE INDEX IF NOT EXISTS idx_hazard_events_occurred_at
 ON hazard_events (occurred_at);
 
+-- One immutable broker message is queued only when a canonical event is first inserted.
+-- Source records revisited by inclusive cursors update the canonical projection but do not
+-- create a second outbox event.
+CREATE TABLE IF NOT EXISTS outbox_events (
+    event_id TEXT PRIMARY KEY NOT NULL,
+    hazard_id TEXT NOT NULL UNIQUE,
+    correlation_id TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    payload TEXT NOT NULL CHECK (json_valid(payload) AND json_type(payload) = 'object'),
+    created_at TEXT NOT NULL,
+    published_at TEXT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_outbox_events_pending
+ON outbox_events (created_at) WHERE published_at IS NULL;
+
 -- Inclusive source timestamps, advanced only with a successful hazard batch.
 CREATE TABLE IF NOT EXISTS poll_cursors (
     feed TEXT PRIMARY KEY NOT NULL,
