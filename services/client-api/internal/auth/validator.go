@@ -5,18 +5,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/casdoor/casdoor-go-sdk/casdoorsdk"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 var (
 	ErrNoToken      = errors.New("no bearer token provided")
 	ErrInvalidToken = errors.New("invalid or expired token")
-	ErrScopeDenied  = errors.New("insufficient scope for this resource")
-	ErrTokenExpired = errors.New("token expired (60s TTL enforced)")
+	ErrTokenExpired = errors.New("token expired")
 )
 
 // maxTokenAge is the maximum allowed age of a token (60 seconds).
-// Configurable via env var for demo purposes.
 var maxTokenAge = 60 * time.Second
 
 // SetMaxTokenAge allows configuration of the maximum token age.
@@ -27,6 +25,13 @@ func SetMaxTokenAge(d time.Duration) {
 type Claims struct {
 	ClientID string
 	Scope    string
+}
+
+var jwtSecret []byte
+
+// InitAuth initializes the auth package with the JWT secret.
+func InitAuth(authServiceURL, secret string) {
+	jwtSecret = []byte(secret)
 }
 
 func ValidateToken(authHeader string) (*Claims, error) {
@@ -44,31 +49,40 @@ func ValidateToken(authHeader string) (*Claims, error) {
 		return nil, ErrNoToken
 	}
 
-	parsed, err := casdoorsdk.ParseJwtToken(token)
+	parsed, err := jwt.Parse(token, func(token *jwt.Token) (any, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
+		return jwtSecret, nil
+	})
 	if err != nil {
 		return nil, ErrInvalidToken
 	}
 
-	// Enforce 60s TTL at the API layer (Casdoor's minimum granularity is 1 hour)
-	iat := parsed.IssuedAt
-	if iat != nil {
-		age := time.Since(iat.Time)
+	claims, ok := parsed.Claims.(jwt.MapClaims)
+	if !ok || !parsed.Valid {
+		return nil, ErrInvalidToken
+	}
+
+	// Check token age
+	if iat, ok := claims["iat"].(float64); ok {
+		age := time.Since(time.Unix(int64(iat), 0))
 		if age > maxTokenAge {
 			return nil, ErrTokenExpired
 		}
 	}
 
-	scope := parsed.Properties["scope"]
+	scope, _ := claims["scope"].(string)
 	if scope == "" {
 		scope = "summary"
 	}
 
+	name, _ := claims["name"].(string)
+
 	return &Claims{
-		ClientID: parsed.Name,
+		ClientID: name,
 		Scope:    scope,
 	}, nil
 }
 
-func (c *Claims) CanAccessFull() bool {
-	return c.Scope == "full"
-}
+

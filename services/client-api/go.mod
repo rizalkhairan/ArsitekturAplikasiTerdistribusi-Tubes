@@ -6,6 +6,7 @@ require github.com/casdoor/casdoor-go-sdk v0.30.0
 
 require (
 	github.com/golang-jwt/jwt/v4 v4.1.0 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/golang/protobuf v1.4.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	golang.org/x/net v0.0.0-20200822124328-c89045814202 // indirect

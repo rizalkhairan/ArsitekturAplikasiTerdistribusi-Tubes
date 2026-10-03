@@ -56,7 +56,7 @@ public class CliApp {
                     case "autorefresh" -> toggleAutoRefresh(arg);
                     case "whoami" -> whoami();
                     case "tokens" -> showTokens();
-                    case "hazards" -> hazards(arg);
+                    case "hazards" -> hazardsCommand(arg);
                     case "hazard" -> hazard(arg);
                     case "logout" -> logout();
                     case "help" -> printHelp();
@@ -178,15 +178,14 @@ public class CliApp {
         DateTimeFormatter fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault());
         for (int i = 0; i < tokenHistory.size(); i++) {
             TokenRecord t = tokenHistory.get(i);
-            System.out.printf("  [%d] %s | %s | %s%n", i + 1, fmt.format(t.time), t.type,
-                t.token.substring(0, Math.min(50, t.token.length())) + "...");
+            System.out.printf("  [%d] %s | %s%n  %s%n", i + 1, fmt.format(t.time), t.type, t.token);
         }
         System.out.println("\n  Current access token: " + (accessToken != null ? "\033[1;32mactive\033[0m" : "\033[1;31mnone\033[0m"));
         System.out.println("  Current refresh token: " + (refreshToken != null ? "\033[1;32mactive\033[0m" : "\033[1;31mnone\033[0m"));
         System.out.println("  Auto-refresh: " + (autoRefresh ? "\033[1;32mON\033[0m" : "\033[1;31mOFF\033[0m"));
     }
 
-    private void hazards(String arg) {
+    private void hazardsCommand(String arg) {
         if (accessToken == null) {
             System.out.println("\033[1;31mNot logged in. Use 'login <username> <password>' first.\033[0m");
             return;
@@ -204,9 +203,27 @@ public class CliApp {
             }
         }
 
+        // Parse simple command: hazards [source] [limit]
         String url = API_URL + "/hazards";
-        if (!arg.isEmpty()) {
-            url += "?" + arg;
+        String[] parts = arg.trim().split("\\s+");
+        java.util.List<String> params = new java.util.ArrayList<>();
+
+        for (String part : parts) {
+            if (part.isEmpty()) continue;
+            try {
+                Integer.parseInt(part);
+                params.add("limit=" + part);
+            } catch (NumberFormatException e) {
+                if (part.equalsIgnoreCase("BMKG") || part.equalsIgnoreCase("PVMBG")) {
+                    params.add("source=" + part);
+                } else {
+                    params.add("severity=" + part);
+                }
+            }
+        }
+
+        if (!params.isEmpty()) {
+            url += "?" + String.join("&", params);
         }
 
         System.out.println("\033[1;33mFetching hazards...\033[0m");
@@ -413,17 +430,28 @@ public class CliApp {
         System.out.println("  \033[1;33mautorefresh [on|off]\033[0m             — Toggle auto-refresh (no arg = toggle)");
         System.out.println("  \033[1;33mwhoami\033[0m                           — Show current user info");
         System.out.println("  \033[1;33mtokens\033[0m                           — Show all received tokens");
-        System.out.println("  \033[1;33mhazards [query]\033[0m                   — List hazard events (e.g. ?source=BMKG&limit=10)");
+        System.out.println("  \033[1;33mhazards <limit>\033[0m                       — List hazard events (limit required, 1-100)");
+        System.out.println("  \033[1;33mhazards <source> <limit>\033[0m              — List hazard events filtered by source");
         System.out.println("  \033[1;33mhazard <id>\033[0m                       — Get single hazard event by ID");
         System.out.println("  \033[1;33mlogout\033[0m                           — Clear session and logout");
         System.out.println("  \033[1;33mclear\033[0m                            — Clear screen");
         System.out.println("  \033[1;33mhelp\033[0m                              — Show this help");
         System.out.println("  \033[1;33mexit\033[0m                              — Exit CLI");
         System.out.println();
+        System.out.println("\033[1;36m=== Command Formats ===\033[0m");
+        System.out.println("  login <username> <password>");
+        System.out.println("  hazards <limit>              — e.g. hazards 5");
+        System.out.println("  hazards <source> <limit>     — e.g. hazards BMKG 5");
+        System.out.println("  hazards <severity> <limit>   — e.g. hazards SIAGA 5");
+        System.out.println("  hazard <id>                 — Get single hazard by ID");
+        System.out.println("  autorefresh                — Toggle auto-refresh");
+        System.out.println("  autorefresh on             — Enable auto-refresh");
+        System.out.println("  autorefresh off            — Disable auto-refresh");
+        System.out.println();
         System.out.println("\033[1;36m=== Quick Start ===\033[0m");
         System.out.println("  1. login media-user media-pass-2026    — Login as media (summary scope)");
-        System.out.println("  2. hazards                              — List all hazards");
-        System.out.println("  3. hazards ?source=BMKG&limit=5         — Filter by source");
+        System.out.println("  2. hazards 5                          — List hazards (limit required)");
+        System.out.println("  3. hazards BMKG 5                       — Filter by source and limit");
         System.out.println("  4. autorefresh off                      — Disable auto-refresh");
         System.out.println("        \033[1;33mNote:\033[0m Token expires in 60 seconds. Auto-refresh is ON by default.");
     }

@@ -31,38 +31,21 @@ services:
       - bmkg
       - pvmbg
 
-  casdoor:
-    image: casbin/casdoor:latest
+  auth:
+    build: ./services/auth
     ports:
       - "8000:8000"
     environment:
-      driverName: postgres
-      dataSourceName: postgres://casdoor:${CASDOOR_DB_PASSWORD}@casdoor-db:5432/casdoor?sslmode=disable
-      initDataFile: /app/init_data.json
+      PORT: 8000
+      DB_PATH: /app/data/auth.db
+      JWT_SECRET: ${JWT_SECRET}
+      ACCESS_TOKEN_TTL_SECONDS: 60
+      REFRESH_TOKEN_TTL_HOURS: 24
+      MEDIA_USER_PASSWORD: ${MEDIA_USER_PASSWORD}
+      FIELD_USER_PASSWORD: ${FIELD_USER_PASSWORD}
+      INTERNAL_USER_PASSWORD: ${INTERNAL_USER_PASSWORD}
     volumes:
-      - ./services/casdoor/init_data.json:/app/init_data.json
-    depends_on:
-      casdoor-db:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  casdoor-db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: casdoor
-      POSTGRES_PASSWORD: ${CASDOOR_DB_PASSWORD}
-      POSTGRES_DB: casdoor
-    volumes:
-      - casdoor-pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U casdoor"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+      - auth-data:/app/data
 
   client-api:
     build: ./services/client-api
@@ -72,10 +55,10 @@ services:
       - ./services/client-api/.env
     depends_on:
       - bnpb
-      - casdoor
+      - auth
 
 volumes:
   bmkg-data:
   pvmbg-data:
   bnpb-data:
-  casdoor-pgdata:
+  auth-data:

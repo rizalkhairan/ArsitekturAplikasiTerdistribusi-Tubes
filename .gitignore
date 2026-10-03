@@ -18,3 +18,5 @@ client/target/
 *.iml
 .vscode/
 *.log
+
+tests/*

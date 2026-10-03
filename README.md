@@ -5,36 +5,24 @@ Sistem koordinasi kebencana yang menjembatani BMKG, PVMBG, dan BNPB.
 ## Arsitektur
 
 ```
-┌──────────────┐
-│  PostgreSQL  │  (Casdoor's DB)
-│  :5432       │
-└──────┬───────┘
-       │
-┌──────┴───────┐         ┌──────────────────┐
-│   Casdoor    │         │                  │
-│  Auth/Token  │◄────────┤   Client-Facing  │
-│  Service     │  app    │   API :8080      │
-│  :8000       │  creds  │                  │
-│              │         │  (Go)            │
-└──────────────┘         └────────┬─────────┘
-                                  │ HTTP read
-                         ┌────────┴─────────┐
-                         │   BNPB           │
-                         │   Aggregator     │
-                         │   + Store        │
-                         │   :8085          │
-                         └────────┬─────────┘
-                                  │
-                    ┌─────────────┴─────────────┐
-                    │                           │
-             ┌──────┴──────┐            ┌───────┴──────┐
-             │    BMKG     │            │    PVMBG     │
-             │  gRPC :8081 │            │  REST :8082  │
-             └─────────────┘            └──────────────┘
-
-  ┌──────────┐
-  │   CLI    │  (Java) — talks to Client-Facing API only
-  └──────────┘
+┌──────────┐         ┌──────────────────┐         ┌──────────┐
+│   CLI    │ ──────► │  Client-Facing   │ ──────► │   Auth   │
+│          │  HTTP   │  API :9080        │  HTTP   │  :8000   │
+│          │ ◄────── │                  │ ◄────── │  SQLite  │
+└──────────┘         └────────┬─────────┘         └──────────┘
+                              │ HTTP read
+                     ┌────────┴─────────┐
+                     │   BNPB           │
+                     │   Aggregator     │
+                     │   :8085          │
+                     └────────┬─────────┘
+                              │
+                    ┌─────────┴─────────┐
+                    │                   │
+             ┌──────┴──────┐    ┌───────┴──────┐
+             │    BMKG     │    │    PVMBG     │
+             │  gRPC :8081 │    │  REST :8082  │
+             └─────────────┘    └──────────────┘
 ```
 
 ## Services
@@ -44,23 +32,22 @@ Sistem koordinasi kebencana yang menjembatani BMKG, PVMBG, dan BNPB.
 | BMKG | 8081 | gRPC | Seismic & tsunami data source (mock) |
 | PVMBG | 8082 | REST | Volcanic activity data source (mock) |
 | BNPB Aggregator | 8085 | HTTP | Polls sources, stores canonical data, serves read API |
-| Casdoor | 8000 | HTTP | OAuth2/OIDC auth server |
-| PostgreSQL | 5432 | — | Casdoor's database |
-| Client-Facing API | 8080 | HTTP | Serves hazard data + auth proxy with scope-based filtering |
+| Auth Service | 8000 | HTTP | Custom JWT auth — login, refresh, user management |
+| Client-Facing API | 9080 | HTTP | Serves hazard data + auth proxy with scope-based filtering |
 
 ---
 
 ## Authentication Flow
 
-The CLI talks **only** to the Client-Facing API. The Client-Facing API proxies auth requests to Casdoor using the application credentials (stored server-side).
+The CLI talks **only** to the Client-Facing API. The Client-Facing API proxies auth requests to the Auth Service.
 
 ```
 CLI → POST /auth/login {username, password}
-  Client-Facing API → Casdoor (with app credentials)
+  Client-Facing API → Auth Service
   Returns: {access_token, refresh_token}
 
 CLI → POST /auth/refresh {refresh_token}
-  Client-Facing API → Casdoor (with app credentials)
+  Client-Facing API → Auth Service
   Returns: {new_access_token, new_refresh_token}
 
 CLI → GET /hazards (with access_token)
@@ -86,13 +73,11 @@ PVMBG_MAX_DELAY_MS=3000
 # === BNPB ===
 BNPB_API_PORT=8085
 
-# === Casdoor ===
-CASDOOR_DB_PASSWORD=casdoor-db-password-change-me
-CASDOOR_ADMIN_USER=admin
-CASDOOR_ADMIN_PASSWORD=123
-CASDOOR_ORG_NAME=bnpb
-CASDOOR_APP_NAME=bnpb-client-api
-SEED_USERS=true
+# === Auth Service ===
+JWT_SECRET=bnpb-jwt-secret-2026
+MEDIA_USER_PASSWORD=media-pass-2026
+FIELD_USER_PASSWORD=field-pass-2026
+INTERNAL_USER_PASSWORD=internal-pass-2026
 ```
 
 ### services/bmkg/.env
@@ -123,6 +108,19 @@ SEED_USERS=true
 | `BNPB_API_PORT` | `8085` | HTTP read API port |
 | `INTERNAL_API_KEY` | (required) | Shared secret for internal service-to-service auth |
 
+### services/auth/.env (via docker-compose environment)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8000` | HTTP server port |
+| `DB_PATH` | `/app/data/auth.db` | SQLite database file path |
+| `JWT_SECRET` | (required) | JWT signing secret (HS256) |
+| `ACCESS_TOKEN_TTL_SECONDS` | `60` | Access token TTL in seconds |
+| `REFRESH_TOKEN_TTL_HOURS` | `24` | Refresh token TTL in hours |
+| `MEDIA_USER_PASSWORD` | (required) | Password for media-user |
+| `FIELD_USER_PASSWORD` | (required) | Password for field-user |
+| `INTERNAL_USER_PASSWORD` | (required) | Password for internal-user |
+
 ### services/client-api/.env
 
 | Variable | Default | Description |
@@ -130,27 +128,12 @@ SEED_USERS=true
 | `PORT` | `8080` | HTTP server port |
 | `BNPB_API_URL` | `http://bnpb:8085` | BNPB Aggregator base URL |
 | `BNPB_INTERNAL_KEY` | (required) | Shared secret for BNPB read API auth |
-| `CASDOOR_ENDPOINT` | `http://casdoor:8000` | Casdoor server URL |
-| `CASDOOR_CLIENT_ID` | (required) | Casdoor application client ID (from bootstrap) |
-| `CASDOOR_CLIENT_SECRET` | (required) | Casdoor application client secret (from bootstrap) |
-| `CASDOOR_CERTIFICATE` | (required) | Casdoor application certificate (PEM, from bootstrap) |
-| `CASDOOR_ORG_NAME` | `bnpb` | Casdoor organization name |
-| `CASDOOR_APP_NAME` | `bnpb-client-api` | Casdoor application name |
+| `AUTH_SERVICE_URL` | `http://auth:8000` | Auth Service base URL |
+| `JWT_SECRET` | (required) | JWT validation secret (must match auth service) |
 | `UPSTREAM_TIMEOUT` | `5s` | Timeout for BNPB API calls |
 | `MAX_CONCURRENT_REQUESTS` | `100` | Rate limit: max concurrent requests |
 | `TOKEN_TTL_SECONDS` | `60` | Access token TTL in seconds |
 | `MAX_LIMIT` | `100` | Maximum value for `limit` query parameter |
-
-### casdoor-bootstrap environment (from docker-compose.yml)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CASDOOR_ENDPOINT` | `http://casdoor:8000` | Casdoor server URL |
-| `CASDOOR_ADMIN_USER` | `admin` | Casdoor admin username |
-| `CASDOOR_ADMIN_PASSWORD` | `123` | Casdoor admin password |
-| `CASDOOR_ORG_NAME` | `bnpb` | Organization name to create |
-| `CASDOOR_APP_NAME` | `bnpb-client-api` | Application name to create |
-| `SEED_USERS` | `true` | Whether to seed users (`true`/`false`) |
 
 ---
 
@@ -160,7 +143,7 @@ SEED_USERS=true
 
 | File | Purpose |
 |------|---------|
-| `docker-compose.yml` | Orchestrates all 7 containers |
+| `docker-compose.yml` | Orchestrates all 5 containers |
 | `.env.example` | Template for all environment variables |
 | `.gitignore` | Ignores `.env`, `*.db`, `target/`, `*.jar`, IDE files |
 
@@ -207,11 +190,15 @@ SEED_USERS=true
 | `Dockerfile` | Multi-stage build, Alpine runtime |
 | `.env` | DB path, upstream addresses, API port, internal key |
 
-### services/casdoor-bootstrap/ (Auth Bootstrap)
+### services/auth/ (Custom Auth Service)
 
 | File | Purpose |
 |------|---------|
-| `main.go` | Logs into Casdoor as admin, creates organization, application, 3 users with categories (if SEED_USERS=true), verifies users |
+| `main.go` | HTTP server, user seeding, JWT configuration, middleware chain |
+| `internal/handlers/handlers.go` | Login, refresh, health handlers; JWT generation; refresh token rotation |
+| `internal/database/database.go` | SQLite connection, user seeding (env-based passwords), password hashing |
+| `internal/database/schema.sql` | Schema: users, refresh_tokens tables |
+| `internal/middleware/middleware.go` | Correlation ID + structured logging middleware |
 | `Dockerfile` | Multi-stage build, Alpine runtime |
 
 ### services/client-api/ (Client-Facing API + Auth Proxy)
@@ -219,9 +206,9 @@ SEED_USERS=true
 | File | Purpose |
 |------|---------|
 | `main.go` | HTTP server, routing, middleware chain, auth proxy endpoints |
-| `config.go` | Loads env vars, initializes Casdoor SDK |
-| `internal/auth/validator.go` | JWT validation via Casdoor SDK, 60s TTL enforcement |
-| `internal/auth/proxy.go` | **New** — Proxies login/refresh to Casdoor with app credentials |
+| `config.go` | Loads env vars, initializes auth |
+| `internal/auth/validator.go` | JWT validation, 60s TTL enforcement |
+| `internal/auth/proxy.go` | Proxies login/refresh to Auth Service |
 | `internal/auth/scope_guard.go` | Rejects media-scope clients requesting raw fields (403) |
 | `internal/filter/fields.go` | Scope-based field filtering (summary vs full) |
 | `internal/bnpb/client.go` | HTTP client for BNPB Aggregator |
@@ -229,7 +216,7 @@ SEED_USERS=true
 | `internal/middleware/logging.go` | Structured JSON logging middleware |
 | `internal/middleware/ratelimit.go` | Semaphore-based rate limiter (429) |
 | `Dockerfile` | Multi-stage build, Alpine runtime |
-| `.env` | API port, BNPB URL, Casdoor SDK config, rate limit, TTL |
+| `.env` | API port, BNPB URL, Auth Service URL, JWT secret, rate limit, TTL |
 
 ### client/ (Java CLI)
 
@@ -250,11 +237,11 @@ SEED_USERS=true
 | PVMBG | 20 volcanic reports | `services/pvmbg/main.go` → `seedReports()` | On startup |
 | BNPB | 1 volcano reference (Merapi) | `services/bnpb/internal/database/schema.sql` | On DB init |
 | BNPB | Canonical events | Polls BMKG/PVMBG every 3s | Continuous |
-| Casdoor | Org, app, 3 users | `services/casdoor-bootstrap/main.go` | On container start (if SEED_USERS=true) |
+| Auth | 3 users (media, field, internal) | `services/auth/internal/database/database.go` → `SeedUsers()` | On startup |
 
 ---
 
-## User Accounts (from Casdoor Bootstrap)
+## User Accounts
 
 | Username | Password | Category | Scope | Access |
 |----------|----------|----------|-------|--------|
@@ -270,7 +257,7 @@ SEED_USERS=true
 # 1. Start all services
 docker compose up --build
 
-# 2. Wait ~30 seconds for Casdoor to start and bootstrap to complete
+# 2. Wait ~15 seconds for all services to be ready
 
 # 3. Build the CLI client
 cd client && mvn package
@@ -299,15 +286,23 @@ See [client/readme.md](client/readme.md) for full CLI documentation.
 
 ## API Endpoints
 
-### Client-Facing API (:8080)
+### Client-Facing API (:9080)
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | /health | None | Health check |
-| POST | /auth/login | None | Proxy login to Casdoor (username + password) |
-| POST | /auth/refresh | None | Proxy refresh to Casdoor (refresh_token) |
+| POST | /auth/login | None | Proxy login to Auth Service (username + password) |
+| POST | /auth/refresh | None | Proxy refresh to Auth Service (refresh_token) |
 | GET | /hazards | Bearer | List hazard events |
 | GET | /hazards/:id | Bearer | Get single hazard event |
+
+### Auth Service (:8000)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /health | Health check |
+| POST | /auth/login | Username/password → access + refresh token |
+| POST | /auth/refresh | Refresh token → new access + refresh token |
 
 ### BNPB Aggregator (:8085)
 
@@ -316,15 +311,6 @@ See [client/readme.md](client/readme.md) for full CLI documentation.
 | GET | /health | Health check |
 | GET | /hazards | List all canonical events |
 | GET | /hazards/:id | Get single event |
-
-### Casdoor (:8000)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | /api/login | Admin login |
-| POST | /api/login/oauth/access_token | OAuth2 token endpoint |
-| POST | /api/login/oauth/refresh_token | OAuth2 refresh endpoint |
-| GET | /api/userinfo | Get user info |
 
 ---
 
@@ -385,8 +371,8 @@ BNPB> hazards ?fields=latitude
 | Component | Technology |
 |-----------|------------|
 | Language | Go 1.26 |
-| Auth | Casdoor (OAuth2/OIDC) |
-| Database | SQLite (BMKG, PVMBG, BNPB), PostgreSQL (Casdoor) |
-| Communication | gRPC (BMKG), REST/HTTP (PVMBG, BNPB, Client API) |
+| Auth | Custom JWT (HS256) with refresh token rotation |
+| Database | SQLite (BMKG, PVMBG, BNPB, Auth) |
+| Communication | gRPC (BMKG), REST/HTTP (PVMBG, BNPB, Auth, Client API) |
 | CLI | Java 17 |
 | Deployment | Docker + Docker Compose |

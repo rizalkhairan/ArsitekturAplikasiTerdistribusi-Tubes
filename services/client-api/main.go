@@ -21,17 +21,17 @@ import (
 func main() {
 	cfg := loadConfig()
 
-	if err := initCasdoor(); err != nil {
-		log.Fatalf("Casdoor initialization failed: %v", err)
+	if err := initAuth(cfg); err != nil {
+		log.Fatalf("Auth initialization failed: %v", err)
 	}
 
 	bnpbClient := bnpb.NewClient(cfg.BNPBURL, cfg.UpstreamTimeout, cfg.BNPBInternalKey)
-	casdoorProxy := auth.NewCasdoorProxy(cfg.CasdoorEndpoint, cfg.CasdoorClientID, cfg.CasdoorClientSecret)
+	authProxy := auth.NewAuthProxy(cfg.AuthServiceURL)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
-	mux.HandleFunc("POST /auth/login", handleLogin(casdoorProxy))
-	mux.HandleFunc("POST /auth/refresh", handleRefresh(casdoorProxy))
+	mux.HandleFunc("POST /auth/login", handleLogin(authProxy))
+	mux.HandleFunc("POST /auth/refresh", handleRefresh(authProxy))
 	mux.HandleFunc("GET /hazards", authMiddleware(handleListHazards(bnpbClient, cfg.MaxLimit)))
 	mux.HandleFunc("GET /hazards/{id}", authMiddleware(handleGetHazard(bnpbClient)))
 
@@ -80,7 +80,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-func handleLogin(proxy *auth.CasdoorProxy) http.HandlerFunc {
+func handleLogin(proxy *auth.AuthProxy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Username string `json:"username"`
@@ -105,7 +105,7 @@ func handleLogin(proxy *auth.CasdoorProxy) http.HandlerFunc {
 	}
 }
 
-func handleRefresh(proxy *auth.CasdoorProxy) http.HandlerFunc {
+func handleRefresh(proxy *auth.AuthProxy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			RefreshToken string `json:"refresh_token"`
