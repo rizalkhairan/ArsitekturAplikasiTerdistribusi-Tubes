@@ -5,15 +5,19 @@ go 1.26.1
 require (
 	github.com/google/uuid v1.6.0
 	github.com/rizalkhairan/distributed-system/bmkg v0.0.0
+	github.com/twmb/franz-go v1.20.5
 	google.golang.org/grpc v1.79.0
 	modernc.org/sqlite v1.59.0
 )
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/klauspost/compress v1.20.1 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/pierrec/lz4/v4 v4.1.22 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/twmb/franz-go/pkg/kmsg v1.12.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.32.0 // indirect

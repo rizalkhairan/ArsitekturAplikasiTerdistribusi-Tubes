@@ -17,5 +17,6 @@ RUN apk add --no-cache ca-certificates \
 WORKDIR /app
 COPY --from=builder /out/bnpb ./bnpb
 ENV DB_PATH=/app/data/bnpb.db
+EXPOSE 8080
 USER bnpb
 CMD ["./bnpb"]
