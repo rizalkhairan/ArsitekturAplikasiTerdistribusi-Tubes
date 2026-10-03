@@ -408,7 +408,7 @@ BNPB> hazards ?fields=latitude
 4. Check service health:
 
    ```bash
-   curl --fail http://localhost:8080/health
+   curl --fail http://localhost:8086/health
    curl --fail http://localhost:8091/health
    curl --fail http://localhost:8092/health
    ```
