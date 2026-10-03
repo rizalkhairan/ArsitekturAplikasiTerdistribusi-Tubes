@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -9,6 +10,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type VolcanicReport struct {
@@ -46,13 +49,17 @@ func main() {
 
 	go generateReports()
 
-	http.HandleFunc("/health", health)
-	http.HandleFunc("/volcanic-reports", volcanicReports)
-	http.HandleFunc("/admin/schema-version", schemaVersionHandler)
-	http.HandleFunc("/admin/outage", outageHandler)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", health)
+	mux.HandleFunc("/volcanic-reports", volcanicReports)
+	mux.HandleFunc("/admin/schema-version", schemaVersionHandler)
+	mux.HandleFunc("/admin/outage", outageHandler)
+
+	// Middleware chain: correlation → logging → routes
+	handler := correlationMiddleware(loggingMiddleware(mux))
 
 	log.Printf("PVMBG listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
 
 func seedReports() {
@@ -149,6 +156,58 @@ func delay() {
 	ms := rand.Intn(max-min+1) + min
 
 	time.Sleep(time.Duration(ms) * time.Millisecond)
+}
+
+// correlationMiddleware generates or accepts X-Correlation-ID.
+func correlationMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		corrID := r.Header.Get("X-Correlation-ID")
+		if corrID == "" {
+			corrID = uuid.NewString()
+		}
+		ctx := context.WithValue(r.Context(), "correlation_id", corrID)
+		w.Header().Set("X-Correlation-ID", corrID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// loggingMiddleware logs structured JSON with correlation ID and latency.
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		corrID, _ := r.Context().Value("correlation_id").(string)
+
+		wrapped := &statusWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		next.ServeHTTP(wrapped, r)
+
+		latency := time.Since(start)
+		logJSON(map[string]any{
+			"ts":         start.Format(time.RFC3339Nano),
+			"corr_id":    corrID,
+			"method":     r.Method,
+			"path":       r.URL.Path,
+			"status":     wrapped.statusCode,
+			"latency_ms": latency.Milliseconds(),
+		})
+	})
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (sw *statusWriter) WriteHeader(code int) {
+	sw.statusCode = code
+	sw.ResponseWriter.WriteHeader(code)
+}
+
+func logJSON(data map[string]any) {
+	b, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+	log.Print(string(b))
 }
 
 func health(w http.ResponseWriter, r *http.Request) {

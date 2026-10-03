@@ -21,6 +21,8 @@ type config struct {
 	KafkaPublishRetryBackoff time.Duration
 	OutboxPollInterval       time.Duration
 	HealthAddress            string
+	APIPort                  string
+	InternalAPIKey           string
 	UpstreamTimeout          time.Duration
 	PollInterval             time.Duration
 }
@@ -36,6 +38,8 @@ func loadConfig() (config, error) {
 		KafkaTopic:    env("KAFKA_TOPIC_HAZARD_EVENTS", "hazard-events"),
 		KafkaClientID: env("KAFKA_CLIENT_ID", "bnpb-aggregator"),
 		HealthAddress: env("HEALTH_ADDR", ":8080"),
+		APIPort:       env("BNPB_API_PORT", "8085"),
+		InternalAPIKey: os.Getenv("INTERNAL_API_KEY"),
 	}
 	var err error
 	cfg.UpstreamTimeout, err = time.ParseDuration(env("UPSTREAM_TIMEOUT", "5s"))
@@ -60,6 +64,9 @@ func loadConfig() (config, error) {
 	}
 	if cfg.BMKGKey == "" || cfg.PVMBGToken == "" {
 		return cfg, fmt.Errorf("BMKG_API_KEY and PVMBG_TOKEN are required")
+	}
+	if cfg.InternalAPIKey == "" {
+		return cfg, fmt.Errorf("INTERNAL_API_KEY is required for read API authentication")
 	}
 	return cfg, nil
 }

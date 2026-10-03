@@ -1,0 +1,15 @@
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY NOT NULL,
+    username TEXT NOT NULL UNIQUE,
+    password TEXT NOT NULL,
+    category TEXT NOT NULL,
+    scope TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    token_id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL,
+    token TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
+    revoked INTEGER NOT NULL DEFAULT 0
+) STRICT;

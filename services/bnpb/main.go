@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rizalkhairan/distributed-system/bnpb/internal/api"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/communication"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/database"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/messaging"
@@ -51,6 +52,17 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Start HTTP read API for Client-Facing API
+	readAPI := api.NewServer(":"+cfg.APIPort, db, cfg.InternalAPIKey)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := readAPI.Start(); err != nil && err != http.ErrServerClosed {
+			log.Printf("BNPB read API error: %v", err)
+		}
+	}()
+
 	var workers sync.WaitGroup
 	workers.Go(func() { startPoll(ctx, cfg.PollInterval, cfg.KafkaTopic, db, sources) })
 	workers.Go(func() {
@@ -61,6 +73,12 @@ func main() {
 	})
 	workers.Go(func() { serveHealth(ctx, cfg.HealthAddress) })
 	workers.Wait()
+
+	// Graceful shutdown
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	readAPI.Shutdown(shutdownCtx)
+	wg.Wait()
 }
 
 func serveHealth(ctx context.Context, address string) {
