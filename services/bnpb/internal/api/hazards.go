@@ -16,6 +16,11 @@ func (s *Server) handleListHazards(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if source := q.Get("source"); source != "" {
+		s.writeFreshnessHeaders(w, source)
+	} else {
+		s.writeFreshnessHeaders(w)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(events)
 }
@@ -27,6 +32,7 @@ func (s *Server) handleGetHazard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "hazard not found")
 		return
 	}
+	s.writeFreshnessHeaders(w, event.Source)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(event)
 }

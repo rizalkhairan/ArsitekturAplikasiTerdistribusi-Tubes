@@ -2,7 +2,7 @@
 
 A Java command-line client for the BNPB Client-Facing API. Authenticate as a user, query hazard events, and manage your session.
 
-The CLI talks **only** to the Client-Facing API (`http://localhost:9080`). It never talks to Casdoor/Auth directly for queries; login/refresh go through `POST /auth/login` and `POST /auth/refresh` on the Client-Facing API.
+The CLI talks **only** to the Client-Facing API (`http://localhost:9080`). It never talks to the Auth Service directly; login/refresh go through `POST /auth/login` and `POST /auth/refresh` on the Client-Facing API.
 
 ## Prerequisites
 
@@ -324,7 +324,7 @@ curl -s "http://localhost:9080/hazards?fields=latitude" -H "Authorization: Beare
 
 ### 15. Rate Limiting (429) — Load Test, Not Single CLI
 
-A single CLI cannot easily trigger the 100-concurrent-request limit. Use the automated suite (`tests/README.md`) or a loop from multiple shells. Single CLI requests should normally return 200.
+A single CLI cannot easily trigger the 100-concurrent-request limit. Use the load generator in [`tools/loadtest`](../tools/loadtest/README.md). Single CLI requests should normally return 200.
 
 ### 16. Logout
 

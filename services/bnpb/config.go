@@ -25,6 +25,7 @@ type config struct {
 	InternalAPIKey           string
 	UpstreamTimeout          time.Duration
 	PollInterval             time.Duration
+	StalenessThreshold       time.Duration
 }
 
 func loadConfig() (config, error) {
@@ -53,6 +54,10 @@ func loadConfig() (config, error) {
 	cfg.OutboxPollInterval, err = time.ParseDuration(env("OUTBOX_POLL_INTERVAL", "1s"))
 	if err != nil || cfg.OutboxPollInterval <= 0 {
 		return cfg, fmt.Errorf("OUTBOX_POLL_INTERVAL must be a positive duration, such as 1s")
+	}
+	cfg.StalenessThreshold, err = time.ParseDuration(env("STALENESS_THRESHOLD", "10s"))
+	if err != nil || cfg.StalenessThreshold <= 0 {
+		return cfg, fmt.Errorf("STALENESS_THRESHOLD must be a positive duration, such as 10s")
 	}
 	cfg.KafkaPublishRetryLimit, err = strconv.Atoi(env("KAFKA_PUBLISH_RETRY_LIMIT", "3"))
 	if err != nil || cfg.KafkaPublishRetryLimit < 1 {

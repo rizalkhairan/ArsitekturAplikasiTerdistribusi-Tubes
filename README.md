@@ -1,556 +1,444 @@
-# Tugas Besar IF4031 Arsitektur Aplikasi Terdistribusi
+# Tugas Besar IF4031 — Arsitektur Aplikasi Terdistribusi
 
-Sistem koordinasi kebencana yang menjembatani BMKG, PVMBG, dan BNPB.
+Platform koordinasi kebencanaan yang menjembatani **BMKG**, **PVMBG**, dan **BNPB**.
+BMKG dan PVMBG adalah mock service pasif; BNPB melakukan polling, memetakan data ke
+format kanonik `HazardEvent`, menyimpannya, dan mempublikasikannya ke message broker
+untuk dikonsumsi beberapa consumer independen.
 
-## Arsitektur
+Cakupan: dua instansi sumber (BMKG, PVMBG), dua jenis bencana (seismik, vulkanik),
+BNPB sebagai node koordinasi.
+
+---
+
+## 1. Arsitektur
 
 ```
-┌──────────┐         ┌──────────────────┐         ┌──────────┐
-│   CLI    │ ──────► │  Client-Facing   │ ──────► │   Auth   │
-│          │  HTTP   │  API :9080        │  HTTP   │  :8000   │
-│          │ ◄────── │                  │ ◄────── │  SQLite  │
-└──────────┘         └────────┬─────────┘         └──────────┘
-                              │ HTTP read
-                     ┌────────┴─────────┐
-                     │   BNPB           │
-                     │   Aggregator     │
-                     │   :8085          │
-                     └────────┬─────────┘
-                              │
-                    ┌─────────┴─────────┐
-                    │                   │
-             ┌──────┴──────┐    ┌───────┴──────┐
-             │    BMKG     │    │    PVMBG     │
-             │  gRPC :8081 │    │  REST :8082  │
-             └─────────────┘    └──────────────┘
+                         ┌──────────────────────┐
+                         │   CLI (Java)         │
+                         └──────────┬───────────┘
+                                    │ HTTP (Bearer JWT)
+                         ┌──────────▼───────────┐        ┌──────────────┐
+                         │ Client-Facing API    │───────▶│ Auth Service │
+                         │      :9080           │ proxy  │    :8000     │
+                         └──────────┬───────────┘        └──────────────┘
+                                    │ HTTP (X-Internal-Key)
+                         ┌──────────▼───────────┐
+                         │ BNPB Aggregator      │  owns Canonical Store (SQLite)
+                         │  read API  :8085     │  owns outbox
+                         │  health    :8086     │
+                         └───┬──────────┬───────┘
+                gRPC        │          │ REST
+        ┌────────────────────▼──┐   ┌───▼──────────────────┐
+        │ BMKG mock  :8081      │   │ PVMBG mock  :8082     │
+        └───────────────────────┘   └───────────────────────┘
+                                    │ publish HazardEvent
+                         ┌──────────▼───────────┐
+                         │ Kafka (KRaft) :9092  │
+                         └───┬──────────┬───────┴────────┐
+                             │          │                │
+                   ┌─────────▼──┐  ┌────▼─────┐   ┌──────▼──────────┐
+                   │ dashboard- │  │ notifier │   │ analytics-      │
+                   │ updater    │  │  :8092   │   │ consumer :8093  │
+                   │  :8091     │  └──────────┘   │ (profile)       │
+                   └────────────┘                 └─────────────────┘
 ```
 
-## Services
+### Komponen
 
-| Service | Port | Protocol | Description |
-|---------|------|----------|-------------|
-| BMKG | 8081 | gRPC | Seismic & tsunami data source (mock) |
-| PVMBG | 8082 | REST | Volcanic activity data source (mock) |
-| BNPB Aggregator | 8085 | HTTP | Polls sources, stores canonical data, serves read API |
-| Auth Service | 8000 | HTTP | Custom JWT auth — login, refresh, user management |
-| Client-Facing API | 9080 | HTTP | Serves hazard data + auth proxy with scope-based filtering |
+| Service | Container port | Host port | Peran |
+|---------|----------------|-----------|-------|
+| BMKG mock | 8081 | 8081 | Sumber data seismik & tsunami (gRPC) |
+| PVMBG mock | 8082 | 8082 | Sumber data vulkanik (REST) |
+| BNPB Aggregator | 8085 (read API), 8080 (health) | 8085, 8086 | Polling, mapping kanonik, Canonical Store, outbox |
+| Auth Service | 8000 | 8000 | Menerbitkan access + refresh token (JWT) |
+| Client-Facing API | 8080 | 9080 | Gateway client; filter scope; rate limit; proxy auth |
+| Kafka | 9092 | — | Broker event-driven (`hazard-events`, `hazard-events-dlq`) |
+| dashboard-updater | 8080 | 8091 | Consumer #1 |
+| notifier | 8080 | 8092 | Consumer #2 |
+| analytics-consumer | 8080 | 8093 | Consumer tambahan (profile `analytics`) |
 
----
-
-## Authentication Flow
-
-The CLI talks **only** to the Client-Facing API. The Client-Facing API proxies auth requests to the Auth Service.
-
-```
-CLI → POST /auth/login {username, password}
-  Client-Facing API → Auth Service
-  Returns: {access_token, refresh_token}
-
-CLI → POST /auth/refresh {refresh_token}
-  Client-Facing API → Auth Service
-  Returns: {new_access_token, new_refresh_token}
-
-CLI → GET /hazards (with access_token)
-  Client-Facing API → BNPB Aggregator
-  Returns: filtered hazard data (based on user's scope)
-```
+> Port dapat diubah melalui environment variable. Port di atas adalah default yang
+> dipakai `docker-compose.yml` dan CLI.
 
 ---
 
-## Environment Variables
+## 2. Menjalankan dari kondisi awal
 
-### Root `.env.example`
-
-```env
-# === BMKG ===
-BMKG_API_KEY=bmkg-secret-key-change-me
-
-# === PVMBG ===
-PVMBG_TOKEN=pvmbg-secret-token-change-me
-PVMBG_MIN_DELAY_MS=500
-PVMBG_MAX_DELAY_MS=3000
-
-# === BNPB ===
-BNPB_API_PORT=8085
-
-# === Auth Service ===
-JWT_SECRET=bnpb-jwt-secret-2026
-MEDIA_USER_PASSWORD=media-pass-2026
-FIELD_USER_PASSWORD=field-pass-2026
-INTERNAL_USER_PASSWORD=internal-pass-2026
-```
-
-### services/bmkg/.env
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BMKG_API_KEY` | (required) | Secret key for gRPC auth via `X-BMKG-Key` header |
-
-### services/pvmbg/.env
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PVMBG_TOKEN` | (required) | Bearer token for REST auth |
-| `PVMBG_MIN_DELAY_MS` | 500 | Minimum artificial delay (ms) |
-| `PVMBG_MAX_DELAY_MS` | 3000 | Maximum artificial delay (ms) |
-
-### services/bnpb/.env
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DB_PATH` | `./data/bnpb.db` | SQLite database file path |
-| `BMKG_GRPC_ADDR` | `bmkg:8081` | BMKG gRPC server address |
-| `BMKG_API_KEY` | (required) | BMKG auth key |
-| `PVMBG_BASE_URL` | `http://pvmbg:8082` | PVMBG REST base URL |
-| `PVMBG_TOKEN` | (required) | PVMBG auth token |
-| `UPSTREAM_TIMEOUT` | `5s` | Timeout for upstream calls |
-| `POLL_INTERVAL` | `3s` | Polling interval (2-5s recommended) |
-| `BNPB_API_PORT` | `8085` | HTTP read API port |
-| `INTERNAL_API_KEY` | (required) | Shared secret for internal service-to-service auth |
-
-### services/auth/.env (via docker-compose environment)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `8000` | HTTP server port |
-| `DB_PATH` | `/app/data/auth.db` | SQLite database file path |
-| `JWT_SECRET` | (required) | JWT signing secret (HS256) |
-| `ACCESS_TOKEN_TTL_SECONDS` | `60` | Access token TTL in seconds |
-| `REFRESH_TOKEN_TTL_HOURS` | `24` | Refresh token TTL in hours |
-| `MEDIA_USER_PASSWORD` | (required) | Password for media-user |
-| `FIELD_USER_PASSWORD` | (required) | Password for field-user |
-| `INTERNAL_USER_PASSWORD` | (required) | Password for internal-user |
-
-### services/client-api/.env
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `8080` | HTTP server port |
-| `BNPB_API_URL` | `http://bnpb:8085` | BNPB Aggregator base URL |
-| `BNPB_INTERNAL_KEY` | (required) | Shared secret for BNPB read API auth |
-| `AUTH_SERVICE_URL` | `http://auth:8000` | Auth Service base URL |
-| `JWT_SECRET` | (required) | JWT validation secret (must match auth service) |
-| `UPSTREAM_TIMEOUT` | `5s` | Timeout for BNPB API calls |
-| `MAX_CONCURRENT_REQUESTS` | `100` | Rate limit: max concurrent requests |
-| `TOKEN_TTL_SECONDS` | `60` | Access token TTL in seconds |
-| `MAX_LIMIT` | `100` | Maximum value for `limit` query parameter |
-
----
-
-## File Structure & What Each File Does
-
-### Root
-
-| File | Purpose |
-|------|---------|
-| `docker-compose.yml` | Orchestrates all 5 containers |
-| `.env.example` | Template for all environment variables |
-| `.gitignore` | Ignores `.env`, `*.db`, `target/`, `*.jar`, IDE files |
-
-### services/bmkg/ (Seismic & Tsunami Data Source)
-
-| File | Purpose |
-|------|---------|
-| `main.go` | gRPC server, event seeding (20 events), event generation (every 10s), auth interceptor with correlation ID |
-| `database.go` | SQLite CRUD for seismic events and tsunami warnings |
-| `schema.sql` | Database schema (seismic_events, tsunami_warnings tables) |
-| `proto/bmkg.proto` | Protobuf service definition |
-| `Dockerfile` | Multi-stage build, Alpine runtime |
-| `.env` | `BMKG_API_KEY` |
-
-### services/pvmbg/ (Volcanic Activity Data Source)
-
-| File | Purpose |
-|------|---------|
-| `main.go` | REST server, report seeding (20 reports), report generation (every 10s), auth, admin controls, correlation ID middleware |
-| `database.go` | SQLite CRUD for volcanic reports |
-| `schema.sql` | Database schema (volcanic_reports table) |
-| `Dockerfile` | Multi-stage build, Alpine runtime |
-| `.env` | `PVMBG_TOKEN`, `PVMBG_MIN_DELAY_MS`, `PVMBG_MAX_DELAY_MS` |
-
-### services/bnpb/ (Aggregator + Canonical Store)
-
-| File | Purpose |
-|------|---------|
-| `main.go` | Entry point, starts HTTP read API + polling goroutines |
-| `config.go` | Loads env vars |
-| `internal/api/server.go` | HTTP read API with correlation ID, logging, internal auth |
-| `internal/api/hazards.go` | Hazard read handlers |
-| `internal/communication/bmkg.go` | gRPC client for BMKG with correlation ID + latency logging |
-| `internal/communication/pvmbg.go` | HTTP client for PVMBG with correlation ID + latency logging |
-| `internal/communication/clients.go` | Client factory |
-| `internal/database/sqlite.go` | SQLite connection (WAL mode) |
-| `internal/database/schema.sql` | Schema: volcano_references, hazard_events, poll_cursors |
-| `internal/database/hazards.go` | Hazard CRUD, ListHazards, GetHazard queries |
-| `internal/database/cursors.go` | Cursor-based incremental poll tracking |
-| `internal/processing/aggregator.go` | Maps BMKG/PVMBG data to canonical HazardEvent |
-| `internal/processing/bmkg_merge.go` | Merge logic for late-arriving tsunami warnings |
-| `internal/middleware/correlation.go` | Correlation ID middleware |
-| `internal/middleware/logging.go` | Structured JSON logging middleware |
-| `Dockerfile` | Multi-stage build, Alpine runtime |
-| `.env` | DB path, upstream addresses, API port, internal key |
-
-### services/auth/ (Custom Auth Service)
-
-| File | Purpose |
-|------|---------|
-| `main.go` | HTTP server, user seeding, JWT configuration, middleware chain |
-| `internal/handlers/handlers.go` | Login, refresh, health handlers; JWT generation; refresh token rotation |
-| `internal/database/database.go` | SQLite connection, user seeding (env-based passwords), password hashing |
-| `internal/database/schema.sql` | Schema: users, refresh_tokens tables |
-| `internal/middleware/middleware.go` | Correlation ID + structured logging middleware |
-| `Dockerfile` | Multi-stage build, Alpine runtime |
-
-### services/client-api/ (Client-Facing API + Auth Proxy)
-
-| File | Purpose |
-|------|---------|
-| `main.go` | HTTP server, routing, middleware chain, auth proxy endpoints |
-| `config.go` | Loads env vars, initializes auth |
-| `internal/auth/validator.go` | JWT validation, 60s TTL enforcement |
-| `internal/auth/proxy.go` | Proxies login/refresh to Auth Service |
-| `internal/auth/scope_guard.go` | Rejects media-scope clients requesting raw fields (403) |
-| `internal/filter/fields.go` | Scope-based field filtering (summary vs full) |
-| `internal/bnpb/client.go` | HTTP client for BNPB Aggregator |
-| `internal/middleware/correlation.go` | Correlation ID middleware |
-| `internal/middleware/logging.go` | Structured JSON logging middleware |
-| `internal/middleware/ratelimit.go` | Semaphore-based rate limiter (429) |
-| `Dockerfile` | Multi-stage build, Alpine runtime |
-| `.env` | API port, BNPB URL, Auth Service URL, JWT secret, rate limit, TTL |
-
-### client/ (Java CLI)
-
-| File | Purpose |
-|------|---------|
-| `pom.xml` | Maven build with Jackson dependency |
-| `src/main/java/com/bnpb/cli/CliApp.java` | CLI app — talks to Client-Facing API only (login, refresh, autorefresh, whoami, tokens, hazards, hazard, logout) |
-| `readme.md` | CLI documentation |
-| `target/` | Build output (gitignored) |
-
----
-
-## Seeding Summary
-
-| Service | What Seeds | Where | When |
-|---------|-----------|-------|------|
-| BMKG | 20 seismic events | `services/bmkg/main.go` → `seedEvents()` | On startup |
-| PVMBG | 20 volcanic reports | `services/pvmbg/main.go` → `seedReports()` | On startup |
-| BNPB | 1 volcano reference (Merapi) | `services/bnpb/internal/database/schema.sql` | On DB init |
-| BNPB | Canonical events | Polls BMKG/PVMBG every 3s | Continuous |
-| Auth | 3 users (media, field, internal) | `services/auth/internal/database/database.go` → `SeedUsers()` | On startup |
-
----
-
-## User Accounts
-
-| Username | Password | Category | Scope | Access |
-|----------|----------|----------|-------|--------|
-| `media-user` | `media-pass-2026` | media | summary | hazard_id, source, hazard_type, severity, area_name, occurred_at |
-| `field-user` | `field-pass-2026` | field | full | All fields including coordinates and attributes |
-| `internal-user` | `internal-pass-2026` | internal | full | All fields including coordinates and attributes |
-
----
-
-## Quick Start
+**Prasyarat:** Docker Desktop (Linux containers) dan Java 17+ (untuk CLI).
 
 ```bash
-# 1. Start all services
-docker compose up --build
+# 1. Salin template environment (file .env di-ignore oleh Git)
+cp .env.example .env
+cp services/bmkg/.env.example services/bmkg/.env
+cp services/pvmbg/.env.example services/pvmbg/.env
+cp services/bnpb/.env.example services/bnpb/.env
+cp services/client-api/.env.example services/client-api/.env
 
-# 2. Wait ~15 seconds for all services to be ready
+# 2. Nyalakan seluruh sistem (satu perintah orkestrasi)
+docker compose up --build -d
 
-# 3. Build the CLI client
-cd client && mvn package
+# 3. Tunggu ±20 detik, lalu cek status
+docker compose ps
+```
 
-# 4. Run the CLI
+Untuk memulai benar-benar bersih (menghapus volume Kafka/DB):
+
+```bash
+docker compose down -v
+docker compose up --build -d
+```
+
+Health check cepat:
+
+```bash
+curl http://localhost:9080/health     # Client-Facing API
+curl http://localhost:8082/health     # PVMBG
+curl http://localhost:8000/health     # Auth
+curl http://localhost:8086/health     # BNPB health
+```
+
+### Menjalankan CLI
+
+```bash
+cd client
+mvn package
 java -jar target/bnpb-cli-client-1.0.0.jar
 ```
 
-## CLI Usage
-
-```
-BNPB> login media-user media-pass-2026
-BNPB> hazards
-BNPB> hazards ?source=BMKG&limit=5
-BNPB> whoami
-BNPB> tokens
-BNPB> autorefresh off
-BNPB> refresh
-BNPB> logout
-BNPB> exit
-```
-
-See [client/readme.md](client/readme.md) for full CLI documentation.
+CLI hanya berbicara ke Client-Facing API di `http://localhost:9080`.
 
 ---
 
-## API Endpoints
+## 3. Variabel konfigurasi
 
-### Client-Facing API (:9080)
+### Root `.env` (dipakai Docker Compose untuk interpolasi)
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | /health | None | Health check |
-| POST | /auth/login | None | Proxy login to Auth Service (username + password) |
-| POST | /auth/refresh | None | Proxy refresh to Auth Service (refresh_token) |
-| GET | /hazards | Bearer | List hazard events |
-| GET | /hazards/:id | Bearer | Get single hazard event |
+| Variabel | Default contoh | Keterangan |
+| --- | --- | --- |
+| `JWT_SECRET` | `local-dev-jwt-secret` | Kunci penandatanganan JWT (harus sama untuk Auth & Client-Facing API) |
+| `ACCESS_TOKEN_TTL_SECONDS` | `60` | TTL access token (default 60 detik) |
+| `REFRESH_TOKEN_TTL_HOURS` | `24` | TTL refresh token |
+| `MEDIA_USER_PASSWORD` | `media-pass-2026` | Password akun media |
+| `FIELD_USER_PASSWORD` | `field-pass-2026` | Password akun tim lapangan |
+| `INTERNAL_USER_PASSWORD` | `internal-pass-2026` | Password akun internal |
+| `INTERNAL_API_KEY` | `local-dev-internal-key` | Shared secret BNPB read API ↔ Client-Facing API |
 
-### Auth Service (:8000)
+### `services/bmkg/.env`
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | /health | Health check |
-| POST | /auth/login | Username/password → access + refresh token |
-| POST | /auth/refresh | Refresh token → new access + refresh token |
+| Variabel | Contoh | Keterangan |
+| --- | --- | --- |
+| `PORT` | `8081` | Port gRPC |
+| `BMKG_API_KEY` | `local-dev-bmkg-key` | Key yang divalidasi lewat metadata `x-bmkg-key` |
+| `DB_PATH` | `/app/data/bmkg.db` | SQLite milik BMKG |
 
-### BNPB Aggregator (:8085)
+### `services/pvmbg/.env`
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | /health | Health check |
-| GET | /hazards | List all canonical events |
-| GET | /hazards/:id | Get single event |
+| Variabel | Contoh | Keterangan |
+| --- | --- | --- |
+| `PORT` | `8082` | Port HTTP |
+| `PVMBG_TOKEN` | `local-dev-pvmbg-token` | Bearer token (`Authorization: Bearer <token>`) |
+| `ADMIN_USERNAME` | `admin` | Basic auth untuk endpoint `/admin/*` |
+| `ADMIN_PASSWORD` | `local-dev-admin-password` | Password admin mock |
+| `PVMBG_MIN_DELAY_MS` | `500` | Batas bawah delay simulasi |
+| `PVMBG_MAX_DELAY_MS` | `3000` | Batas atas delay simulasi |
+| `DB_PATH` | `/app/data/pvmbg.db` | SQLite milik PVMBG |
+
+### `services/bnpb/.env`
+
+| Variabel | Contoh | Keterangan |
+| --- | --- | --- |
+| `DB_PATH` | `/app/data/bnpb.db` | Canonical Store (SQLite) |
+| `BMKG_GRPC_ADDR` | `bmkg:8081` | Alamat gRPC BMKG |
+| `BMKG_API_KEY` | `local-dev-bmkg-key` | Harus sama dengan BMKG |
+| `PVMBG_BASE_URL` | `http://pvmbg:8082` | Base URL PVMBG |
+| `PVMBG_TOKEN` | `local-dev-pvmbg-token` | Harus sama dengan PVMBG |
+| `UPSTREAM_TIMEOUT` | `5s` | Timeout request ke sumber |
+| `POLL_INTERVAL` | `3s` | Interval polling (disarankan 2–5 detik) |
+| `BNPB_API_PORT` | `8085` | Port read API |
+| `HEALTH_ADDR` | `:8080` | Alamat health server |
+| `INTERNAL_API_KEY` | `local-dev-internal-key` | Shared secret (di-inject dari root `.env`) |
+| `STALENESS_THRESHOLD` | `10s` | Ambang data dianggap basi saat sumber gagal |
+| `KAFKA_BROKERS` | `kafka:9092` | Broker Kafka |
+| `KAFKA_TOPIC_HAZARD_EVENTS` | `hazard-events` | Topic event kanonik |
+| `KAFKA_CLIENT_ID` | `bnpb-aggregator` | Client ID producer |
+| `KAFKA_PUBLISH_RETRY_LIMIT` | `3` | Jumlah percobaan publish |
+| `KAFKA_PUBLISH_RETRY_BACKOFF` | `500ms` | Backoff antar percobaan |
+| `OUTBOX_POLL_INTERVAL` | `1s` | Interval scan outbox |
+
+### `services/client-api/.env`
+
+| Variabel | Contoh | Keterangan |
+| --- | --- | --- |
+| `PORT` | `8080` | Port HTTP |
+| `BNPB_API_URL` | `http://bnpb:8085` | Read API Aggregator |
+| `BNPB_INTERNAL_KEY` | `local-dev-internal-key` | Harus sama dengan `INTERNAL_API_KEY` |
+| `AUTH_SERVICE_URL` | `http://auth:8000` | Alamat Auth Service |
+| `JWT_SECRET` | `local-dev-jwt-secret` | Harus sama dengan Auth Service |
+| `UPSTREAM_TIMEOUT` | `5s` | Timeout request ke BNPB |
+| `MAX_CONCURRENT_REQUESTS` | `100` | Batas concurrency (kelebihan → HTTP 429) |
+| `TOKEN_TTL_SECONDS` | `60` | Batas umur token yang diterima |
+| `MAX_LIMIT` | `100` | Batas `limit` query |
+
+### Consumer (`dashboard-updater`, `notifier`, `analytics-consumer`)
+
+| Variabel | Contoh | Keterangan |
+| --- | --- | --- |
+| `KAFKA_BROKERS` | `kafka:9092` | Broker |
+| `KAFKA_TOPIC_HAZARD_EVENTS` | `hazard-events` | Topic sumber |
+| `KAFKA_DLQ_TOPIC` | `hazard-events-dlq` | Topic dead-letter |
+| `HEALTH_ADDR` | `:8080` | Health server |
+| `PROCESS_RETRY_LIMIT` | `3` | Percobaan sebelum DLQ |
+| `PROCESS_RETRY_BACKOFF` | `500ms` | Backoff antar percobaan |
+| `IDEMPOTENCY_CACHE_SIZE` | `10000` | Ukuran cache dedup `event_id` |
+| `NOTIFIER_PROCESSING_DELAY` | `0s` | Delay buatan khusus notifier |
 
 ---
 
-## Testing Scenarios
+## 4. Kontrak mock service
 
-### 1. Media Scope (Summary Fields Only)
-```
-BNPB> login media-user media-pass-2026
-BNPB> hazards
-# Returns: hazard_id, source, hazard_type, severity, area_name, occurred_at
-# Does NOT include: latitude, longitude, attributes
-```
+### BMKG (`:8081`)
 
-### 2. Field Scope (All Fields)
-```
-BNPB> login field-user field-pass-2026
-BNPB> hazards
-# Returns: all fields including latitude, longitude, attributes
-```
+BMKG diakses melalui **gRPC** (proto ada di `services/bmkg/proto/bmkg.proto`).
+Logika endpoint yang ditetapkan kontrak (mengambil event sejak timestamp tertentu,
+warning tsunami terpisah, dan health) dipetakan ke RPC berikut. Autentikasi memakai
+metadata `x-bmkg-key`.
 
-### 3. Token Expiry (60s TTL) with Auto-Refresh ON
-```
-BNPB> login media-user media-pass-2026
-# Wait 60 seconds
-BNPB> hazards
-# Auto-refreshes token, returns data
-```
+| RPC | Auth | Keterangan |
+| --- | --- | --- |
+| `bmkg.BMKG/GetSeismicEvents` (param `since`) | `x-bmkg-key` | Daftar `SeismicEvent` |
+| `bmkg.BMKG/GetTsunamiWarnings` (param `since`) | `x-bmkg-key` | Daftar `TsunamiWarning` |
+| `bmkg.BMKG/Health` | — | Health check |
 
-### 4. Token Expiry with Auto-Refresh OFF
-```
-BNPB> login media-user media-pass-2026
-BNPB> autorefresh off
-# Wait 60 seconds
-BNPB> hazards
-# Returns 401 Unauthorized
-BNPB> refresh
-BNPB> hazards
-# Works again
-```
+- Seed ≥20 event saat start.
+- Event baru setiap ±10 detik.
+- Delay tetap 50–150 ms.
+- `TsunamiWarning` dibuat hanya untuk event `potential_tsunami = true`.
 
-### 5. Explicit Raw Field Rejection
-```
-BNPB> login media-user media-pass-2026
-BNPB> hazards ?fields=latitude
-# Returns 403 Forbidden
-```
+### PVMBG (`:8082`)
 
-### 6. Rate Limiting
-```
-# Send >100 concurrent requests
-# Returns 429 Too Many Requests
-```
+| Method | Path | Auth | Keterangan |
+| --- | --- | --- | --- |
+| GET | `/volcanic-reports?since=<ISO8601>` | `Authorization: Bearer <PVMBG_TOKEN>` | Daftar `VolcanicReport` |
+| POST | `/admin/schema-version` | Basic admin | Aktifkan/nonaktifkan `confidence_level` saat berjalan |
+| POST | `/admin/outage` | Basic admin | Nyalakan/matikan outage seketika |
+| GET | `/health` | — | Health check |
+
+- Seed ≥20 laporan saat start; laporan baru setiap ±10 detik.
+- Delay acak `PVMBG_MIN_DELAY_MS`–`PVMBG_MAX_DELAY_MS`.
+- Saat `outage` aktif, semua permintaan data mengembalikan `503` seketika.
+
+**Perbedaan kredensial:** key BMKG ditolak oleh PVMBG (`401`) dan sebaliknya
+(BMKG gRPC → `Unauthenticated`). Formatnya pun berbeda (metadata `x-bmkg-key` vs
+`Authorization: Bearer`).
 
 ---
 
-## Technology Stack
+## 5. Format kanonik `HazardEvent`
 
-| Component | Technology |
-|-----------|------------|
-| Language | Go 1.26 |
-| Auth | Custom JWT (HS256) with refresh token rotation |
-| Database | SQLite (BMKG, PVMBG, BNPB, Auth) |
-| Communication | gRPC (BMKG), REST/HTTP (PVMBG, BNPB, Auth, Client API) |
-| CLI | Java 17 |
-| Deployment | Docker + Docker Compose |
+| Field | Sumber | Klasifikasi |
+| --- | --- | --- |
+| `hazard_id` | Dibangkitkan BNPB (UUIDv7) | Ringkasan |
+| `source` | `BMKG` / `PVMBG` | Ringkasan |
+| `source_ref_id` | `event_id` / `report_id` | Mentah |
+| `hazard_type` | `SEISMIC` / `VOLCANIC` | Ringkasan |
+| `severity` | `NORMAL/WASPADA/SIAGA/AWAS` | Ringkasan |
+| `area_name` | `region_name` / nama gunung | Ringkasan |
+| `latitude`, `longitude` | Episentrum / koordinat gunung | Mentah |
+| `occurred_at` | Waktu kejadian sumber | Ringkasan |
+| `ingested_at` | Waktu diterima BNPB | Ringkasan |
+| `attributes` | Field spesifik sumber | Mentah |
+
+- `SeismicEvent → HazardEvent`: severity dari `TsunamiWarning` terkait; jika tidak ada
+  warning, dari magnitudo (`<5.0` NORMAL, `5.0–6.5` WASPADA, `≥6.5` SIAGA).
+  `attributes` memuat `magnitude`, `depth_km`, `potential_tsunami`, dan warning terkait.
+- `VolcanicReport → HazardEvent`: `alert_level` dipetakan langsung; `attributes`
+  memuat `eruption_count_24h`, `ash_column_height_m`, dan **field tak dikenal seperti
+  `confidence_level`** (kebijakan *additive / forward to attributes*).
 
 ---
 
-## Run the system from a clean start
+## 6. Client downstream & hak akses
 
-1. Ensure Docker Desktop is running with Linux containers enabled.
-
-2. Create local environment files from the committed examples. The generated
-   `.env` files are ignored by Git.
-
-   ```bash
-   cp services/bmkg/.env.example services/bmkg/.env
-   cp services/pvmbg/.env.example services/pvmbg/.env
-   cp services/bnpb/.env.example services/bnpb/.env
-   ```
-
-3. Start with fresh Kafka, source, and BNPB data:
-
-   ```bash
-   docker compose down -v
-   docker compose up --build -d
-   docker compose ps
-   ```
-
-   The default stack starts Apache Kafka in KRaft mode, topic initialization,
-   BMKG, PVMBG, BNPB, `dashboard-updater`, and `notifier`. Kafka creates
-   `hazard-events` (three partitions) and `hazard-events-dlq` (one partition),
-   both retained for seven days.
-
-4. Check service health:
-
-   ```bash
-   curl --fail http://localhost:8086/health
-   curl --fail http://localhost:8091/health
-   curl --fail http://localhost:8092/health
-   ```
-
-5. Stop the stack when finished:
-
-   ```bash
-   docker compose down
-   ```
-
-## Configuration variables
-
-All values are read from environment variables. Use the checked-in
-`.env.example` files as local-development templates; do not commit real
-credentials in `.env` files.
-
-### BMKG (`services/bmkg/.env`)
-
-| Variable | Purpose | Example |
+| Akun (username / password) | Scope | Field |
 | --- | --- | --- |
-| `PORT` | gRPC listen port | `8081` |
-| `BMKG_API_KEY` | Key BNPB sends to BMKG | `local-dev-bmkg-key` |
-| `DB_PATH` | BMKG-owned SQLite file | `/app/data/bmkg.db` |
+| `media-user` / `media-pass-2026` | `summary` | Ringkasan saja |
+| `field-user` / `field-pass-2026` | `full` | Ringkasan + Mentah |
+| `internal-user` / `internal-pass-2026` | `full` | Ringkasan + Mentah |
 
-### PVMBG (`services/pvmbg/.env`)
+- Tiga kredensial berbeda; pembeda ditegakkan di sisi BNPB/Client-Facing API, bukan di client.
+- Media yang meminta field mentah eksplisit (`?fields=latitude`, `?include=attributes`,
+  `X-Raw-Fields: true`) ditolak `403`.
+- Access token default ber-TTL 60 detik dan mendukung refresh tanpa login ulang.
+- Seluruh client M1 bersifat read-only.
 
-| Variable | Purpose | Example |
-| --- | --- | --- |
-| `PORT` | HTTP listen port | `8082` |
-| `PVMBG_TOKEN` | Bearer token BNPB sends to PVMBG | `local-dev-pvmbg-token` |
-| `ADMIN_USERNAME` | PVMBG mock admin username | `admin` |
-| `ADMIN_PASSWORD` | PVMBG mock admin password | `local-dev-admin-password` |
-| `PVMBG_MIN_DELAY_MS` | Minimum mock response delay | `10` |
-| `PVMBG_MAX_DELAY_MS` | Maximum mock response delay | `20` |
-| `DB_PATH` | PVMBG-owned SQLite file | `/app/data/pvmbg.db` |
+---
 
-### BNPB (`services/bnpb/.env`)
+## 7. Endpoint API
 
-| Variable | Purpose | Example |
-| --- | --- | --- |
-| `DB_PATH` | BNPB Canonical Store SQLite file | `/app/data/bnpb.db` |
-| `BMKG_GRPC_ADDR` | BMKG Docker-network endpoint | `bmkg:8081` |
-| `BMKG_API_KEY` | Must match BMKG's key | `local-dev-bmkg-key` |
-| `PVMBG_BASE_URL` | PVMBG Docker-network endpoint | `http://pvmbg:8082` |
-| `PVMBG_TOKEN` | Must match PVMBG's token | `local-dev-pvmbg-token` |
-| `UPSTREAM_TIMEOUT` | BMKG/PVMBG request timeout | `5s` |
-| `POLL_INTERVAL` | BNPB source poll interval | `3s` |
-| `HEALTH_ADDR` | BNPB health server address | `:8080` |
-| `KAFKA_BROKERS` | Apache Kafka Docker-network endpoint | `kafka:9092` |
-| `KAFKA_TOPIC_HAZARD_EVENTS` | Canonical hazard event topic | `hazard-events` |
-| `KAFKA_CLIENT_ID` | BNPB Kafka client identifier | `bnpb-aggregator` |
-| `KAFKA_PUBLISH_RETRY_LIMIT` | Outbox publish attempts | `3` |
-| `KAFKA_PUBLISH_RETRY_BACKOFF` | Delay between outbox retries | `500ms` |
-| `OUTBOX_POLL_INTERVAL` | Pending-outbox scan interval | `1s` |
+### Client-Facing API (`:9080`)
 
-### Consumers
+| Method | Path | Auth | Keterangan |
+| --- | --- | --- | --- |
+| GET | `/health` | — | Health check |
+| POST | `/auth/login` | — | Proxy login ke Auth Service |
+| POST | `/auth/refresh` | — | Proxy refresh ke Auth Service |
+| GET | `/hazards?source=&severity=&since=&limit=&fields=` | Bearer | Daftar hazard (difilter per scope) |
+| GET | `/hazards/{id}` | Bearer | Satu hazard |
 
-`dashboard-updater`, `notifier`, and `analytics-consumer` use these shared
-variables. Their Docker Compose configuration uses `kafka:9092`; each service
-also has an `.env.example` for running it independently.
+### Auth Service (`:8000`)
 
-| Variable | Purpose | Example |
-| --- | --- | --- |
-| `KAFKA_BROKERS` | Apache Kafka Docker-network endpoint | `kafka:9092` |
-| `KAFKA_TOPIC_HAZARD_EVENTS` | Source event topic | `hazard-events` |
-| `KAFKA_DLQ_TOPIC` | Permanent-failure topic | `hazard-events-dlq` |
-| `HEALTH_ADDR` | Consumer health server address | `:8080` |
-| `PROCESS_RETRY_LIMIT` | Attempts before DLQ routing | `3` |
-| `PROCESS_RETRY_BACKOFF` | Delay between retry attempts | `500ms` |
-| `IDEMPOTENCY_CACHE_SIZE` | Bounded in-memory `event_id` deduplication entries | `10000` |
-| `NOTIFIER_PROCESSING_DELAY` | Notifier-only simulated processing delay | `0s` |
+`GET /health`, `POST /auth/login`, `POST /auth/refresh`.
 
-## Testing scenarios
+### BNPB read API (`:8085`, hanya untuk internal)
 
-### Problems 1–4
+`GET /health`, `GET /hazards`, `GET /hazards/{id}` — wajib header `X-Internal-Key`.
+Canonical Store tidak pernah diekspos langsung; seluruh komponen lain mengaksesnya
+lewat API Aggregator ini.
 
-#### TODO
+---
 
-### Problem 5: Event-Driven Architecture
+## 8. Skenario pengujian
 
-Run the clean-start procedure above before each independent scenario.
+Jalankan `docker compose down -v && docker compose up --build -d` sebelum tiap
+skenario yang butuh kondisi bersih.
 
-#### 1. New hazards are persisted and published through Kafka
+### Problem 1 — Interoperabilitas & evolusi skema
 
 ```bash
-docker compose logs --tail=100 bnpb
-docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe --topic hazard-events
+TOKEN=$(curl -s -X POST http://localhost:8082/admin/schema-version \
+  -u admin:local-dev-admin-password -H 'Content-Type: application/json' \
+  -d '{"enabled":true}')
 ```
 
-Expected BNPB logs include `kafka publish ... outcome=acknowledged` followed by
-`outbox publish succeeded ... outcome=published`. BNPB writes its Canonical
-Store and outbox transaction before Kafka publishing; no consumer is called
-directly.
+1. Sebelum toggle, `GET /volcanic-reports` (Bearer PVMBG) **tidak** memuat `confidence_level`.
+2. Panggil `POST /admin/schema-version {"enabled":true}` saat sistem berjalan.
+3. PVMBG langsung memuat `confidence_level` **tanpa restart**.
+4. BNPB (tanpa restart) tetap memetakan; field baru masuk ke `attributes`. Cek via CLI:
+   `login field-user field-pass-2026` lalu `hazards PVMBG 5`.
 
-#### 2. Two independent consumers receive the same stream
+Kebijakan: perubahan skema **aditif** didukung; field tak dikenal diteruskan ke
+`attributes`. Perubahan yang menghapus/mengganti tipe field tidak didukung.
+
+### Problem 2 — Ketahanan & degradasi terkendali
+
+**2a. Head-of-line blocking** — set `PVMBG_MIN_DELAY_MS=3000` dan
+`PVMBG_MAX_DELAY_MS=3000`, recreate pvmbg (`docker compose up -d --force-recreate pvmbg`).
+Permintaan BMKG-only tetap cepat karena read API membaca Canonical Store lokal dan
+poller berjalan paralel per sumber. Hasil uji kami: **p95 BMKG-only 282 ms (< 300 ms)**
+saat PVMBG 3 detik.
+
+**2b. Load test** — ≥50 koneksi paralel ≥60 detik memakai
+[`tools/loadtest`](tools/loadtest/README.md):
 
 ```bash
-docker compose logs --tail=100 dashboard-updater
-docker compose logs --tail=100 notifier
-docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:9092 --describe --group dashboard-updater-group
-docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:9092 --describe --group notifier-group
+NET=$(docker network ls --format '{{.Name}}' | grep tubes | head -n1)
+docker run --rm --network "$NET" -v "$PWD/tools/loadtest:/src" -w /src \
+  golang:1.26-alpine go run . -base http://client-api:8080 \
+  -path '/hazards?limit=50' -concurrency 50 -duration 60s -label sustained
 ```
 
-Expected logs contain `dashboard updated ... result=success` and
-`notification simulated ... result=success`. The groups are separate, so both
-receive each event.
+Hasil uji (50 concurrency, 60 s, Client-Facing API): **45.133 request, 752 rps,
+p50 47 ms, p95 187 ms, p99 289 ms, 0 error, 0 throttled**. Saat concurrency
+melebihi `MAX_CONCURRENT_REQUESTS`, kelebihan ditolak `429` (controlled rejection)
+dan sistem tidak crash.
 
-#### 3. Stop notifier while BNPB and dashboard continue
+**2c. Outage terkendali**
 
 ```bash
-docker compose stop notifier
-sleep 15
-docker compose logs --tail=100 bnpb
-docker compose logs --tail=100 dashboard-updater
-docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:9092 --describe --group notifier-group
+# nyalakan outage
+curl -u admin:local-dev-admin-password -X POST http://localhost:8082/admin/outage \
+  -H 'Content-Type: application/json' -d '{"enabled":true}'
 ```
 
-Expected results: BNPB keeps publishing, dashboard keeps processing, and
-notifier-group lag grows. To make notifier visibly slow before stopping it, set
-`NOTIFIER_PROCESSING_DELAY=5s` for the `notifier` Compose service and recreate
-that container.
+- Permintaan seismik tetap `200`.
+- Permintaan vulkanik dijawab `200` dengan data terakhir dari Canonical Store,
+  **disertai penanda kebaruan** berupa header:
+  `X-Data-Freshness: degraded`, `X-Source-PVMBG-Status: stale`,
+  `X-Source-PVMBG-Stale-Since`, `X-Source-PVMBG-Error`. Tidak `500`, tidak menggantung.
+- Setelah outage dimatikan, status kembali `ok` tanpa restart.
 
-#### 4. Restart notifier and verify retained-message catch-up
+### Problem 3 — Autentikasi antar-service & trust
 
-```bash
-docker compose start notifier
-docker compose logs -f notifier
+- **3a. Isolasi kredensial antar instansi**
+
+  ```bash
+  # key BMKG dipakai ke PVMBG → 401
+  curl -s -o /dev/null -w '%{http_code}\n' 'http://localhost:8082/volcanic-reports?since=2000-01-01T00:00:00Z' \
+    -H 'X-BMKG-Key: local-dev-bmkg-key'
+
+  # token PVMBG / key salah dipakai ke BMKG gRPC → Unauthenticated
+  # (butuh grpcurl + file proto; jaringan compose bernama <project>_default)
+  docker run --rm --network "$(docker network ls --format '{{.Name}}' | grep tubes | head -n1)" \
+    -v "$PWD/services/bmkg/proto:/proto" fullstorydev/grpcurl:latest \
+    -plaintext -import-path /proto -proto bmkg.proto \
+    -H 'x-bmkg-key: local-dev-pvmbg-token' \
+    bmkg:8081 bmkg.BMKG/GetSeismicEvents
+  ```
+
+- **3b. Scope media** — login media, lalu `GET /hazards` hanya mengembalikan 6 field
+  ringkasan; `?fields=latitude` → `403`.
+
+- **3c. Expiry + refresh** — login, tunggu >60 detik → `401`; panggil
+  `POST /auth/refresh` dengan `refresh_token` → token baru; token lama tetap `401`;
+  refresh token lama tidak bisa dipakai lagi (rotation).
+
+- **3d. Tidak ada kredensial ter-hardcode** — semua rahasia dibaca dari environment;
+  hanya `.env.example` yang ikut ter-commit.
+
+### Problem 4 — Microservice & flexible storage
+
+- **4a. Independen** — hentikan/rebuild/start satu container tanpa menyentuh yang lain.
+  Contoh: `docker compose stop client-api`; BNPB read API tetap melayani
+  (`curl -H 'X-Internal-Key: local-dev-internal-key' http://localhost:8085/hazards`);
+  lalu `docker compose build client-api && docker compose up -d client-api`. Uptime
+  container lain tidak berubah.
+- **4b. Atribut dinamis** — record sebelum dan sesudah munculnya `confidence_level`
+  tersimpan berdampingan di Canonical Store dan keduanya dapat dibaca (tanpa migrasi).
+- **4c. Kepemilikan store** — `GET http://localhost:8085/hazards` tanpa
+  `X-Internal-Key` → `401`; hanya Aggregator yang memegang volume `bnpb-data`, dan
+  Client-Facing API membaca melalui API Aggregator.
+
+### Problem 5 — Event-driven architecture
+
+- **5a. Publikasi ke broker** — log BNPB memuat `outcome=acknowledged` lalu
+  `outbox publish succeeded`; BNPB tidak memanggil consumer secara langsung.
+- **5b. Dua consumer independen**
+
+  ```bash
+  docker compose logs --tail=50 dashboard-updater
+  docker compose logs --tail=50 notifier
+  docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:9092 --describe --group dashboard-updater-group
+  docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:9092 --describe --group notifier-group
+  ```
+
+- **5c. Hentikan consumer** — `docker compose stop notifier`; producer tetap publish,
+  dashboard tetap memproses, lag `notifier-group` bertambah. `docker compose start notifier`
+  → consumer menyusul (catch-up) dari offset terakhir, lag kembali `0`.
+- **5d. Consumer baru** — `docker compose --profile analytics up -d --build analytics-consumer`.
+  Group baru membaca seluruh event retensi (dari `earliest`) tanpa mengubah producer.
+
+**Semantik pengiriman:** **at-least-once**. Kafka menyimpan event 7 hari dan consumer
+commit offset setelah berhasil memproses. Karena itu consumer wajib idempoten;
+setiap consumer memakai cache `event_id` (bounded) sehingga redelivery dicatat
+`result=duplicate` dan tidak mengulang efek.
+
+---
+
+## 9. Struktur repositori
+
 ```
-
-Expected notifier logs process messages produced while it was stopped. The
-system uses at-least-once delivery: Kafka retains messages for seven days, and
-the notifier resumes from its last committed offset. Duplicate `event_id`
-deliveries are logged as `result=duplicate` and do not repeat consumer effects.
-
-#### 5. Add analytics without changing BNPB
-
-```bash
-docker compose --profile analytics up -d --build analytics-consumer
-docker compose logs -f analytics-consumer
-docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:9092 --describe --group analytics-group
+.
+├── docker-compose.yml            # orkestrasi seluruh container
+├── .env.example                  # template konfigurasi root
+├── services/
+│   ├── bmkg/                     # mock seismik/tsunami (gRPC)
+│   ├── pvmbg/                    # mock vulkanik (REST)
+│   ├── bnpb/                     # aggregator + canonical store + outbox + producer
+│   ├── auth/                     # token service (JWT HS256)
+│   ├── client-api/               # client-facing API + scope filter + rate limit
+│   ├── dashboard-updater/        # consumer #1
+│   ├── notifier/                 # consumer #2
+│   └── analytics-consumer/       # consumer tambahan (profile)
+├── client/                       # CLI Java (lihat client/readme.md)
+└── tools/loadtest/               # load generator untuk Problem 2
 ```
-
-Expected analytics logs contain `analytics aggregate ... result=success`.
-Because `analytics-group` is new and consumers use `auto.offset.reset=earliest`,
-it reads retained events without BNPB changes or redeployment.

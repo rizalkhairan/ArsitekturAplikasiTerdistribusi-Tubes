@@ -14,6 +14,7 @@ import (
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/api"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/communication"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/database"
+	"github.com/rizalkhairan/distributed-system/bnpb/internal/health"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/messaging"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/processing"
 )
@@ -52,8 +53,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Track upstream freshness so the read API can mark stale Canonical data.
+	registry := health.New()
+
 	// Start HTTP read API for Client-Facing API
-	readAPI := api.NewServer(":"+cfg.APIPort, db, cfg.InternalAPIKey)
+	readAPI := api.NewServer(":"+cfg.APIPort, db, cfg.InternalAPIKey, registry, cfg.StalenessThreshold)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -64,7 +68,7 @@ func main() {
 	}()
 
 	var workers sync.WaitGroup
-	workers.Go(func() { startPoll(ctx, cfg.PollInterval, cfg.KafkaTopic, db, sources) })
+	workers.Go(func() { startPoll(ctx, cfg.PollInterval, cfg.KafkaTopic, db, sources, registry) })
 	workers.Go(func() {
 		messaging.OutboxPublisher{
 			DB: db, Publisher: publisher, RetryLimit: cfg.KafkaPublishRetryLimit,
@@ -106,10 +110,10 @@ func serveHealth(ctx context.Context, address string) {
 	}
 }
 
-func startPoll(ctx context.Context, interval time.Duration, topic string, db *sql.DB, sources *communication.Clients) {
+func startPoll(ctx context.Context, interval time.Duration, topic string, db *sql.DB, sources *communication.Clients, registry *health.Registry) {
 	var pollers sync.WaitGroup
 	pollers.Go(func() {
-		pollSource(ctx, "BMKG", interval, topic, db, func(ctx context.Context, cursors database.Cursors) (processing.Batch, error) {
+		pollSource(ctx, "BMKG", interval, topic, db, registry, func(ctx context.Context, cursors database.Cursors) (processing.Batch, error) {
 			events, err := sources.BMKG.SeismicEvents(ctx, cursors[database.SeismicFeed])
 			if err != nil {
 				return processing.Batch{}, err
@@ -122,7 +126,7 @@ func startPoll(ctx context.Context, interval time.Duration, topic string, db *sq
 		})
 	})
 	pollers.Go(func() {
-		pollSource(ctx, "PVMBG", interval, topic, db, func(ctx context.Context, cursors database.Cursors) (processing.Batch, error) {
+		pollSource(ctx, "PVMBG", interval, topic, db, registry, func(ctx context.Context, cursors database.Cursors) (processing.Batch, error) {
 			reports, err := sources.PVMBG.VolcanicReports(ctx, cursors[database.VolcanicFeed])
 			if err != nil {
 				return processing.Batch{}, err
@@ -139,6 +143,7 @@ func pollSource(
 	interval time.Duration,
 	topic string,
 	db *sql.DB,
+	registry *health.Registry,
 	fetchAndAggregate func(context.Context, database.Cursors) (processing.Batch, error),
 ) {
 	pollOnce := func() {
@@ -154,11 +159,15 @@ func pollSource(
 			var stored int
 			stored, err = database.SaveHazards(ctx, db, batch.Hazards, batch.Cursors, topic)
 			if err == nil {
+				registry.RecordSuccess(source)
 				log.Printf("%s: stored %d canonical events", source, stored)
 			}
 		}
-		if err != nil && ctx.Err() == nil {
-			log.Printf("%s poll failed (cursors unchanged): %v", source, err)
+		if err != nil {
+			registry.RecordFailure(source, err)
+			if ctx.Err() == nil {
+				log.Printf("%s poll failed (cursors unchanged): %v", source, err)
+			}
 		}
 	}
 

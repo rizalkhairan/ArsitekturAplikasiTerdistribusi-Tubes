@@ -46,6 +46,8 @@ services:
       dockerfile: bnpb/Dockerfile
     env_file:
       - ./services/bnpb/.env
+    environment:
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
     volumes:
       - bnpb-data:/app/data
     ports:
@@ -167,6 +169,11 @@ services:
       - "9080:8080"
     env_file:
       - ./services/client-api/.env
+    environment:
+      AUTH_SERVICE_URL: http://auth:8000
+      JWT_SECRET: ${JWT_SECRET}
+      BNPB_API_URL: http://bnpb:8085
+      BNPB_INTERNAL_KEY: ${INTERNAL_API_KEY}
     depends_on:
       - bnpb
       - auth

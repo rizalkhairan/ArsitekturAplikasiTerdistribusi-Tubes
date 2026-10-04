@@ -24,14 +24,22 @@ func NewAuthProxy(authURL string) *AuthProxy {
 }
 
 // Login forwards username/password to the auth service.
-func (p *AuthProxy) Login(username, password string) (map[string]any, error) {
+func (p *AuthProxy) Login(correlationID, username, password string) (map[string]any, error) {
 	payload := map[string]string{
 		"username": username,
 		"password": password,
 	}
 	body, _ := json.Marshal(payload)
 
-	resp, err := p.http.Post(p.authURL+"/auth/login", "application/json", bytes.NewBuffer(body))
+	req, err := http.NewRequest(http.MethodPost, p.authURL+"/auth/login", bytes.NewBuffer(body))
+	if err != nil {
+		return nil, fmt.Errorf("auth login: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if correlationID != "" {
+		req.Header.Set("X-Correlation-ID", correlationID)
+	}
+	resp, err := p.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("auth login: %w", err)
 	}
@@ -50,13 +58,21 @@ func (p *AuthProxy) Login(username, password string) (map[string]any, error) {
 }
 
 // Refresh forwards the refresh token to the auth service.
-func (p *AuthProxy) Refresh(refreshToken string) (map[string]any, error) {
+func (p *AuthProxy) Refresh(correlationID, refreshToken string) (map[string]any, error) {
 	payload := map[string]string{
 		"refresh_token": refreshToken,
 	}
 	body, _ := json.Marshal(payload)
 
-	resp, err := p.http.Post(p.authURL+"/auth/refresh", "application/json", bytes.NewBuffer(body))
+	req, err := http.NewRequest(http.MethodPost, p.authURL+"/auth/refresh", bytes.NewBuffer(body))
+	if err != nil {
+		return nil, fmt.Errorf("auth refresh: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if correlationID != "" {
+		req.Header.Set("X-Correlation-ID", correlationID)
+	}
+	resp, err := p.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("auth refresh: %w", err)
 	}

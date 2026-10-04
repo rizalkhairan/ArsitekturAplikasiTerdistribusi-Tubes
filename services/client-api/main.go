@@ -95,7 +95,7 @@ func handleLogin(proxy *auth.AuthProxy) http.HandlerFunc {
 			return
 		}
 
-		result, err := proxy.Login(req.Username, req.Password)
+		result, err := proxy.Login(middleware.GetCorrelationID(r.Context()), req.Username, req.Password)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, err.Error())
 			return
@@ -119,7 +119,7 @@ func handleRefresh(proxy *auth.AuthProxy) http.HandlerFunc {
 			return
 		}
 
-		result, err := proxy.Refresh(req.RefreshToken)
+		result, err := proxy.Refresh(middleware.GetCorrelationID(r.Context()), req.RefreshToken)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, err.Error())
 			return
@@ -166,13 +166,14 @@ func handleListHazards(client *bnpb.Client, maxLimit int) http.HandlerFunc {
 			return
 		}
 
-		hazards, err := client.ListHazards(r.Context(), q.Get("source"), q.Get("severity"), q.Get("since"), limit)
+		hazards, headers, err := client.ListHazards(r.Context(), q.Get("source"), q.Get("severity"), q.Get("since"), limit)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadGateway)
 			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
+		bnpb.CopyFreshnessHeaders(w.Header(), headers)
 
 		// Convert to maps and filter by scope
 		maps := make([]map[string]any, len(hazards))
@@ -191,7 +192,7 @@ func handleGetHazard(client *bnpb.Client) http.HandlerFunc {
 		claims := r.Context().Value("claims").(*auth.Claims)
 		id := r.PathValue("id")
 
-		hazard, err := client.GetHazard(r.Context(), id)
+		hazard, headers, err := client.GetHazard(r.Context(), id)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			if err.Error() == "hazard not found" {
@@ -202,6 +203,7 @@ func handleGetHazard(client *bnpb.Client) http.HandlerFunc {
 			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
+		bnpb.CopyFreshnessHeaders(w.Header(), headers)
 
 		m := filter.ToMap(*hazard)
 		filtered := filter.FilterHazard(m, claims.Scope)

@@ -41,7 +41,30 @@ type Hazard struct {
 	Attributes  map[string]any `json:"attributes"`
 }
 
-func (c *Client) ListHazards(ctx context.Context, source, severity, since string, limit int) ([]Hazard, error) {
+// FreshnessHeaders are propagated from the BNPB read API so downstream clients can
+// detect degraded (stale) source data without parsing the payload.
+var FreshnessHeaders = []string{
+	"X-Data-Freshness",
+	"X-Source-BMKG-Status",
+	"X-Source-BMKG-Last-Success",
+	"X-Source-BMKG-Stale-Since",
+	"X-Source-BMKG-Error",
+	"X-Source-PVMBG-Status",
+	"X-Source-PVMBG-Last-Success",
+	"X-Source-PVMBG-Stale-Since",
+	"X-Source-PVMBG-Error",
+}
+
+// CopyFreshnessHeaders copies known freshness headers from the BNPB response.
+func CopyFreshnessHeaders(dst, src http.Header) {
+	for _, name := range FreshnessHeaders {
+		if value := src.Get(name); value != "" {
+			dst.Set(name, value)
+		}
+	}
+}
+
+func (c *Client) ListHazards(ctx context.Context, source, severity, since string, limit int) ([]Hazard, http.Header, error) {
 	u, _ := url.Parse(c.baseURL + "/hazards")
 	q := u.Query()
 	if source != "" {
@@ -60,7 +83,7 @@ func (c *Client) ListHazards(ctx context.Context, source, severity, since string
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Propagate correlation ID
@@ -79,27 +102,27 @@ func (c *Client) ListHazards(ctx context.Context, source, severity, since string
 	latency := time.Since(start)
 	if err != nil {
 		log.Printf(`{"corr_id":"%s","method":"GET","path":%q,"latency_ms":%d,"error":"%s"}`, corrID, u.String(), latency.Milliseconds(), err.Error())
-		return nil, fmt.Errorf("bnpb list: %w", err)
+		return nil, nil, fmt.Errorf("bnpb list: %w", err)
 	}
 	defer resp.Body.Close()
 
 	log.Printf(`{"corr_id":"%s","method":"GET","path":%q,"status":%d,"latency_ms":%d}`, corrID, u.String(), resp.StatusCode, latency.Milliseconds())
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bnpb list: status %d", resp.StatusCode)
+		return nil, resp.Header, fmt.Errorf("bnpb list: status %d", resp.StatusCode)
 	}
 
 	var hazards []Hazard
 	if err := json.NewDecoder(resp.Body).Decode(&hazards); err != nil {
-		return nil, fmt.Errorf("bnpb list decode: %w", err)
+		return nil, resp.Header, fmt.Errorf("bnpb list decode: %w", err)
 	}
-	return hazards, nil
+	return hazards, resp.Header, nil
 }
 
-func (c *Client) GetHazard(ctx context.Context, id string) (*Hazard, error) {
+func (c *Client) GetHazard(ctx context.Context, id string) (*Hazard, http.Header, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/hazards/"+id, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	corrID := middleware.GetCorrelationID(ctx)
@@ -116,22 +139,22 @@ func (c *Client) GetHazard(ctx context.Context, id string) (*Hazard, error) {
 	latency := time.Since(start)
 	if err != nil {
 		log.Printf(`{"corr_id":"%s","method":"GET","path":%q,"latency_ms":%d,"error":"%s"}`, corrID, "/hazards/"+id, latency.Milliseconds(), err.Error())
-		return nil, fmt.Errorf("bnpb get: %w", err)
+		return nil, nil, fmt.Errorf("bnpb get: %w", err)
 	}
 	defer resp.Body.Close()
 
 	log.Printf(`{"corr_id":"%s","method":"GET","path":%q,"status":%d,"latency_ms":%d}`, corrID, "/hazards/"+id, resp.StatusCode, latency.Milliseconds())
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("hazard not found")
+		return nil, resp.Header, fmt.Errorf("hazard not found")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bnpb get: status %d", resp.StatusCode)
+		return nil, resp.Header, fmt.Errorf("bnpb get: status %d", resp.StatusCode)
 	}
 
 	var hazard Hazard
 	if err := json.NewDecoder(resp.Body).Decode(&hazard); err != nil {
-		return nil, fmt.Errorf("bnpb get decode: %w", err)
+		return nil, resp.Header, fmt.Errorf("bnpb get decode: %w", err)
 	}
-	return &hazard, nil
+	return &hazard, resp.Header, nil
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,8 +24,8 @@ type VolcanicReport struct {
 	ReportedAt       time.Time `json:"reported_at"`
 }
 
-var outage bool
-var schemaVersion bool
+var outage atomic.Bool
+var schemaVersion atomic.Bool
 
 func main() {
 	port := os.Getenv("PORT")
@@ -225,7 +226,7 @@ func volcanicReports(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if outage {
+	if outage.Load() {
 		http.Error(w, "PVMBG unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -242,7 +243,7 @@ func volcanicReports(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	if schemaVersion {
+	if schemaVersion.Load() {
 		type NewReport struct {
 			VolcanicReport
 			ConfidenceLevel float64 `json:"confidence_level"`
@@ -281,10 +282,10 @@ func schemaVersionHandler(w http.ResponseWriter, r *http.Request) {
 
 	json.NewDecoder(r.Body).Decode(&request)
 
-	schemaVersion = request.Enabled
+	schemaVersion.Store(request.Enabled)
 
 	json.NewEncoder(w).Encode(map[string]bool{
-		"enabled": schemaVersion,
+		"enabled": schemaVersion.Load(),
 	})
 }
 
@@ -300,9 +301,9 @@ func outageHandler(w http.ResponseWriter, r *http.Request) {
 
 	json.NewDecoder(r.Body).Decode(&request)
 
-	outage = request.Enabled
+	outage.Store(request.Enabled)
 
 	json.NewEncoder(w).Encode(map[string]bool{
-		"enabled": outage,
+		"enabled": outage.Load(),
 	})
 }

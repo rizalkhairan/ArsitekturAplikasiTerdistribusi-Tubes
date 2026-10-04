@@ -8,17 +8,20 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/rizalkhairan/distributed-system/bnpb/internal/health"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/middleware"
 )
 
 type Server struct {
-	db          *sql.DB
-	server      *http.Server
-	internalKey string
+	db                 *sql.DB
+	server             *http.Server
+	internalKey        string
+	health             *health.Registry
+	stalenessThreshold time.Duration
 }
 
-func NewServer(addr string, db *sql.DB, internalKey string) *Server {
-	s := &Server{db: db, internalKey: internalKey}
+func NewServer(addr string, db *sql.DB, internalKey string, registry *health.Registry, stalenessThreshold time.Duration) *Server {
+	s := &Server{db: db, internalKey: internalKey, health: registry, stalenessThreshold: stalenessThreshold}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /hazards", s.handleListHazards)
@@ -69,6 +72,47 @@ func (s *Server) Shutdown(ctx context.Context) error {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// writeFreshnessHeaders attaches an explicit data-freshness marker to every hazard
+// response. When a source is stale (last poll failed or is older than the configured
+// threshold) the response still returns the last known Canonical Store data, but the
+// caller can detect staleness without parsing the payload.
+func (s *Server) writeFreshnessHeaders(w http.ResponseWriter, sources ...string) {
+	if s.health == nil {
+		return
+	}
+	if len(sources) == 0 {
+		sources = []string{"BMKG", "PVMBG"}
+	}
+	degraded := false
+	for _, source := range sources {
+		stale, lastSuccess, _, message := s.health.SourceStatus(source, s.stalenessThreshold)
+		status := "ok"
+		if stale {
+			status = "stale"
+			degraded = true
+		}
+		w.Header().Set("X-Source-"+source+"-Status", status)
+		if !lastSuccess.IsZero() {
+			w.Header().Set("X-Source-"+source+"-Last-Success", lastSuccess.Format(time.RFC3339))
+		}
+		if stale {
+			since := lastSuccess
+			if since.IsZero() {
+				since = time.Now().UTC()
+			}
+			w.Header().Set("X-Source-"+source+"-Stale-Since", since.Format(time.RFC3339))
+			if message != "" {
+				w.Header().Set("X-Source-"+source+"-Error", message)
+			}
+		}
+	}
+	freshness := "ok"
+	if degraded {
+		freshness = "degraded"
+	}
+	w.Header().Set("X-Data-Freshness", freshness)
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {

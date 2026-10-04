@@ -4,10 +4,15 @@
 *.db
 *.db-shm
 *.db-wal
-*/go.sum
-*/*/go.sum
 */*.exe
 */*/*.exe
+
+# Local Go build outputs (Linux binaries produced when running `go build` in a service dir)
+services/bmkg/bmkg
+services/pvmbg/pvmbg
+services/auth/auth
+services/bnpb/bnpb
+services/client-api/client-api
 
 # Java / Maven
 client/target/
