@@ -67,21 +67,21 @@ BNPB sebagai node koordinasi.
 **Prasyarat:** Docker Desktop (Linux containers) dan Java 17+ (untuk CLI).
 
 ```bash
-# 1. Salin template environment (file .env di-ignore oleh Git)
+# 1. Salin template environment
 cp .env.example .env
 cp services/bmkg/.env.example services/bmkg/.env
 cp services/pvmbg/.env.example services/pvmbg/.env
 cp services/bnpb/.env.example services/bnpb/.env
 cp services/client-api/.env.example services/client-api/.env
 
-# 2. Nyalakan seluruh sistem (satu perintah orkestrasi)
+# 2. Nyalakan seluruh sistem
 docker compose up --build -d
 
 # 3. Tunggu ±20 detik, lalu cek status
 docker compose ps
 ```
 
-Untuk memulai benar-benar bersih (menghapus volume Kafka/DB):
+Untuk memulai clean (menghapus volume Kafka/DB):
 
 ```bash
 docker compose down -v
@@ -111,11 +111,11 @@ CLI hanya berbicara ke Client-Facing API di `http://localhost:9080`.
 
 ## 3. Variabel konfigurasi
 
-### Root `.env` (dipakai Docker Compose untuk interpolasi)
+### Root `.env`
 
 | Variabel | Default contoh | Keterangan |
 | --- | --- | --- |
-| `JWT_SECRET` | `local-dev-jwt-secret` | Kunci penandatanganan JWT (harus sama untuk Auth & Client-Facing API) |
+| `JWT_SECRET` | `local-dev-jwt-secret` | Kunci JWT (harus sama untuk Auth & Client-Facing API) |
 | `ACCESS_TOKEN_TTL_SECONDS` | `60` | TTL access token (default 60 detik) |
 | `REFRESH_TOKEN_TTL_HOURS` | `24` | TTL refresh token |
 | `MEDIA_USER_PASSWORD` | `media-pass-2026` | Password akun media |
@@ -321,11 +321,24 @@ Kebijakan: perubahan skema **aditif** didukung; field tak dikenal diteruskan ke
 
 ### Problem 2 — Ketahanan & degradasi terkendali
 
-**2a. Head-of-line blocking** — set `PVMBG_MIN_DELAY_MS=3000` dan
-`PVMBG_MAX_DELAY_MS=3000`, recreate pvmbg (`docker compose up -d --force-recreate pvmbg`).
-Permintaan BMKG-only tetap cepat karena read API membaca Canonical Store lokal dan
-poller berjalan paralel per sumber. Hasil uji kami: **p95 BMKG-only 282 ms (< 300 ms)**
-saat PVMBG 3 detik.
+**2a. Head-of-line blocking** — dengan PVMBG diperlambat 3 detik, kirim permintaan
+BMKG-only bersamaan dengan permintaan PVMBG; p95 BMKG-only harus tetap < 300 ms.
+
+```bash
+# 1. Atur delay PVMBG ke 3000 ms lalu recreate
+docker compose up -d --force-recreate pvmbg
+sleep 10
+
+# 2. Jalankan BMKG-only dan PVMBG bersamaan (masing-masing 10 koneksi, 15 detik)
+NET=$(docker network ls --format '{{.Name}}' | grep tubes | head -n1)
+docker run --rm --network "$NET" -v "$PWD/tools/loadtest:/src" -w /src \
+  golang:1.26-alpine go run . -base http://client-api:8080 \
+  -path '/hazards?limit=100&source=BMKG' -concurrency 10 -duration 15s -label BMKG-only &
+docker run --rm --network "$NET" -v "$PWD/tools/loadtest:/src" -w /src \
+  golang:1.26-alpine go run . -base http://client-api:8080 \
+  -path '/hazards?limit=100&source=PVMBG' -concurrency 10 -duration 15s -label PVMBG &
+wait
+```
 
 **2b. Load test** — ≥50 koneksi paralel ≥60 detik memakai
 [`tools/loadtest`](tools/loadtest/README.md):
@@ -337,25 +350,48 @@ docker run --rm --network "$NET" -v "$PWD/tools/loadtest:/src" -w /src \
   -path '/hazards?limit=50' -concurrency 50 -duration 60s -label sustained
 ```
 
-Hasil uji (50 concurrency, 60 s, Client-Facing API): **45.133 request, 752 rps,
-p50 47 ms, p95 187 ms, p99 289 ms, 0 error, 0 throttled**. Saat concurrency
-melebihi `MAX_CONCURRENT_REQUESTS`, kelebihan ditolak `429` (controlled rejection)
-dan sistem tidak crash.
-
 **2c. Outage terkendali**
 
 ```bash
-# nyalakan outage
 curl -u admin:local-dev-admin-password -X POST http://localhost:8082/admin/outage \
   -H 'Content-Type: application/json' -d '{"enabled":true}'
 ```
 
-- Permintaan seismik tetap `200`.
-- Permintaan vulkanik dijawab `200` dengan data terakhir dari Canonical Store,
-  **disertai penanda kebaruan** berupa header:
-  `X-Data-Freshness: degraded`, `X-Source-PVMBG-Status: stale`,
-  `X-Source-PVMBG-Stale-Since`, `X-Source-PVMBG-Error`. Tidak `500`, tidak menggantung.
-- Setelah outage dimatikan, status kembali `ok` tanpa restart.
+Tunggu ±10–15 detik, lalu cek kedua jenis permintaan lewat CLI:
+
+```
+BNPB> login field-user field-pass-2026
+BNPB> hazards BMKG 5
+# tetap terisi → permintaan seismik tidak terpengaruh outage PVMBG
+
+BNPB> hazards PVMBG 5
+# mengembalikan data vulkanik terakhir dari Canonical Store (bukan error)
+```
+
+Setelah selesai, matikan outage lalu cek ulang (tanpa restart):
+
+```bash
+curl -u admin:local-dev-admin-password -X POST http://localhost:8082/admin/outage \
+  -H 'Content-Type: application/json' -d '{"enabled":false}'
+```
+
+```
+BNPB> hazards PVMBG 5
+```
+
+> Untuk melihat header freshness:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:9080/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"field-user","password":"field-pass-2026"}' \
+  | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+
+curl -s -D - -o /dev/null \
+  'http://localhost:9080/hazards?source=PVMBG&limit=1' \
+  -H "Authorization: Bearer $TOKEN" \
+  | grep -iE 'HTTP/|X-Data-Freshness|X-Source-PVMBG-'
+```
 
 ### Problem 3 — Autentikasi antar-service & trust
 
@@ -367,7 +403,6 @@ curl -u admin:local-dev-admin-password -X POST http://localhost:8082/admin/outag
     -H 'X-BMKG-Key: local-dev-bmkg-key'
 
   # token PVMBG / key salah dipakai ke BMKG gRPC → Unauthenticated
-  # (butuh grpcurl + file proto; jaringan compose bernama <project>_default)
   docker run --rm --network "$(docker network ls --format '{{.Name}}' | grep tubes | head -n1)" \
     -v "$PWD/services/bmkg/proto:/proto" fullstorydev/grpcurl:latest \
     -plaintext -import-path /proto -proto bmkg.proto \
@@ -378,9 +413,51 @@ curl -u admin:local-dev-admin-password -X POST http://localhost:8082/admin/outag
 - **3b. Scope media** — login media, lalu `GET /hazards` hanya mengembalikan 6 field
   ringkasan; `?fields=latitude` → `403`.
 
+  ```bash
+  TOKEN=$(curl -s -X POST http://localhost:9080/auth/login \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"media-user","password":"media-pass-2026"}' \
+    | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+
+  # hanya berisi hazard_id, source, hazard_type, severity, area_name, occurred_at
+  curl -s 'http://localhost:9080/hazards?limit=1' -H "Authorization: Bearer $TOKEN"
+
+  # minta field mentah secara eksplisit → 403
+  curl -s -o /dev/null -w 'raw field HTTP %{http_code}\n' \
+    'http://localhost:9080/hazards?limit=1&fields=latitude' -H "Authorization: Bearer $TOKEN"
+  ```
+
 - **3c. Expiry + refresh** — login, tunggu >60 detik → `401`; panggil
   `POST /auth/refresh` dengan `refresh_token` → token baru; token lama tetap `401`;
   refresh token lama tidak bisa dipakai lagi (rotation).
+
+  ```bash
+  LOGIN=$(curl -s -X POST http://localhost:9080/auth/login \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"field-user","password":"field-pass-2026"}')
+  ACCESS=$(echo "$LOGIN"  | grep -o '"accessToken":"[^"]*"'  | cut -d'"' -f4)
+  REFRESH=$(echo "$LOGIN" | grep -o '"refreshToken":"[^"]*"' | cut -d'"' -f4)
+
+  curl -s -o /dev/null -w 'fresh token      HTTP %{http_code}\n' \
+    'http://localhost:9080/hazards?limit=1' -H "Authorization: Bearer $ACCESS"
+
+  sleep 62   # TTL access token = 60 detik
+
+  curl -s -o /dev/null -w 'expired token    HTTP %{http_code}\n' \
+    'http://localhost:9080/hazards?limit=1' -H "Authorization: Bearer $ACCESS"
+
+  NEW=$(curl -s -X POST http://localhost:9080/auth/refresh \
+    -H 'Content-Type: application/json' -d "{\"refresh_token\":\"$REFRESH\"}")
+  NEW_ACCESS=$(echo "$NEW" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+
+  curl -s -o /dev/null -w 'refreshed token  HTTP %{http_code}\n' \
+    'http://localhost:9080/hazards?limit=1' -H "Authorization: Bearer $NEW_ACCESS"
+  curl -s -o /dev/null -w 'old token        HTTP %{http_code}\n' \
+    'http://localhost:9080/hazards?limit=1' -H "Authorization: Bearer $ACCESS"
+  curl -s -o /dev/null -w 'old refresh      HTTP %{http_code}\n' -X POST \
+    http://localhost:9080/auth/refresh -H 'Content-Type: application/json' \
+    -d "{\"refresh_token\":\"$REFRESH\"}"
+  ```
 
 - **3d. Tidak ada kredensial ter-hardcode** — semua rahasia dibaca dari environment;
   hanya `.env.example` yang ikut ter-commit.
@@ -402,6 +479,14 @@ curl -u admin:local-dev-admin-password -X POST http://localhost:8082/admin/outag
 
 - **5a. Publikasi ke broker** — log BNPB memuat `outcome=acknowledged` lalu
   `outbox publish succeeded`; BNPB tidak memanggil consumer secara langsung.
+
+  ```bash
+  docker compose logs --tail=100 bnpb \
+    | grep -E 'outcome=acknowledged|outbox publish succeeded'
+
+  docker compose exec kafka /opt/kafka/bin/kafka-topics.sh \
+    --bootstrap-server kafka:9092 --describe --topic hazard-events
+  ```
 - **5b. Dua consumer independen**
 
   ```bash
@@ -411,16 +496,43 @@ curl -u admin:local-dev-admin-password -X POST http://localhost:8082/admin/outag
   docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:9092 --describe --group notifier-group
   ```
 
-- **5c. Hentikan consumer** — `docker compose stop notifier`; producer tetap publish,
-  dashboard tetap memproses, lag `notifier-group` bertambah. `docker compose start notifier`
-  → consumer menyusul (catch-up) dari offset terakhir, lag kembali `0`.
-- **5d. Consumer baru** — `docker compose --profile analytics up -d --build analytics-consumer`.
-  Group baru membaca seluruh event retensi (dari `earliest`) tanpa mengubah producer.
+- **5c. Hentikan consumer** — `notifier` dimatikan, producer tetap publish, dashboard
+  tetap memproses, lag `notifier-group` bertambah. Setelah dinyalakan lagi, consumer
+  menyusul (catch-up) dari offset terakhir, lag kembali `0`.
+
+  ```bash
+  docker compose stop notifier
+  sleep 25
+
+  # producer & consumer lain tetap jalan
+  docker compose logs --since 25s bnpb | grep 'outcome=acknowledged' | tail -n 3
+  docker compose logs --since 25s dashboard-updater | grep 'result=success' | tail -n 3
+
+  # lag notifier bertambah
+  docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+    --bootstrap-server kafka:9092 --describe --group notifier-group
+
+  # nyalakan lagi → catch-up, lag kembali 0
+  docker compose start notifier
+  sleep 12
+  docker compose logs --since 15s notifier | grep 'result=success' | head -n 5
+  docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+    --bootstrap-server kafka:9092 --describe --group notifier-group
+  ```
+
+- **5d. Consumer baru** — group baru membaca seluruh event retensi (dari `earliest`)
+  tanpa mengubah producer.
+
+  ```bash
+  docker compose --profile analytics up -d --build analytics-consumer
+  sleep 15
+  docker compose logs --since 20s analytics-consumer | grep 'result=success' | head -n 5
+  docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+    --bootstrap-server kafka:9092 --describe --group analytics-group
+  ```
 
 **Semantik pengiriman:** **at-least-once**. Kafka menyimpan event 7 hari dan consumer
-commit offset setelah berhasil memproses. Karena itu consumer wajib idempoten;
-setiap consumer memakai cache `event_id` (bounded) sehingga redelivery dicatat
-`result=duplicate` dan tidak mengulang efek.
+commit offset setelah berhasil memproses.
 
 ---
 
@@ -439,6 +551,6 @@ setiap consumer memakai cache `event_id` (bounded) sehingga redelivery dicatat
 │   ├── dashboard-updater/        # consumer #1
 │   ├── notifier/                 # consumer #2
 │   └── analytics-consumer/       # consumer tambahan (profile)
-├── client/                       # CLI Java (lihat client/readme.md)
+├── client/                       # CLI Java (lihat client/README.md)
 └── tools/loadtest/               # load generator untuk Problem 2
 ```
