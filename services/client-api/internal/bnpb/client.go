@@ -41,8 +41,6 @@ type Hazard struct {
 	Attributes  map[string]any `json:"attributes"`
 }
 
-// FreshnessHeaders are propagated from the BNPB read API so downstream clients can
-// detect degraded (stale) source data without parsing the payload.
 var FreshnessHeaders = []string{
 	"X-Data-Freshness",
 	"X-Source-BMKG-Status",
@@ -55,7 +53,6 @@ var FreshnessHeaders = []string{
 	"X-Source-PVMBG-Error",
 }
 
-// CopyFreshnessHeaders copies known freshness headers from the BNPB response.
 func CopyFreshnessHeaders(dst, src http.Header) {
 	for _, name := range FreshnessHeaders {
 		if value := src.Get(name); value != "" {

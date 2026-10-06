@@ -75,9 +75,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeFreshnessHeaders attaches an explicit data-freshness marker to every hazard
-// response. When a source is stale (last poll failed or is older than the configured
-// threshold) the response still returns the last known Canonical Store data, but the
-// caller can detect staleness without parsing the payload.
+// response. When a source is stale, the response still returns the last known Canonical Store data
 func (s *Server) writeFreshnessHeaders(w http.ResponseWriter, sources ...string) {
 	if s.health == nil {
 		return
