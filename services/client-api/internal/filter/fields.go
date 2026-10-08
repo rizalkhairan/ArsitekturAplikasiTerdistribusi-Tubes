@@ -7,7 +7,8 @@ import (
 
 // SummaryFields are the only fields visible to media-scope clients.
 var SummaryFields = []string{
-	"hazard_id", "source", "hazard_type", "severity", "area_name", "occurred_at",
+	"hazard_id", "source", "hazard_type", "severity",
+	"area_name", "occurred_at", "ingested_at",
 }
 
 // FullFields include everything (field/internal scope).
