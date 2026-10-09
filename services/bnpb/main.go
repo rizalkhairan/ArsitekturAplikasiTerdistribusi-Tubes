@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"log"
 	"net/http"
 	"os"
@@ -26,11 +25,12 @@ func main() {
 	}
 
 	// Init db
-	db, err := database.Open(cfg.DBPath)
+	pools, err := database.OpenPools(cfg.DBPath, cfg.DBReadConnections)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer db.Close()
+	defer pools.Close()
+	log.Printf("Canonical Store pools: read_connections=%d write_connections=1", cfg.DBReadConnections)
 
 	// Init service comms module
 	sources, err := communication.New(
@@ -57,7 +57,7 @@ func main() {
 	registry := health.New()
 
 	// Start HTTP read API for Client-Facing API
-	readAPI := api.NewServer(":"+cfg.APIPort, db, cfg.InternalAPIKey, registry, cfg.StalenessThreshold)
+	readAPI := api.NewServer(":"+cfg.APIPort, pools.Read, cfg.InternalAPIKey, registry, cfg.StalenessThreshold)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -68,10 +68,10 @@ func main() {
 	}()
 
 	var workers sync.WaitGroup
-	workers.Go(func() { startPoll(ctx, cfg.PollInterval, cfg.KafkaTopic, db, sources, registry) })
+	workers.Go(func() { startPoll(ctx, cfg.PollInterval, cfg.KafkaTopic, pools, sources, registry) })
 	workers.Go(func() {
 		messaging.OutboxPublisher{
-			DB: db, Publisher: publisher, RetryLimit: cfg.KafkaPublishRetryLimit,
+			ReadDB: pools.Read, WriteDB: pools.Write, Publisher: publisher, RetryLimit: cfg.KafkaPublishRetryLimit,
 			RetryBackoff: cfg.KafkaPublishRetryBackoff, PollInterval: cfg.OutboxPollInterval,
 		}.Run(ctx)
 	})
@@ -110,10 +110,10 @@ func serveHealth(ctx context.Context, address string) {
 	}
 }
 
-func startPoll(ctx context.Context, interval time.Duration, topic string, db *sql.DB, sources *communication.Clients, registry *health.Registry) {
+func startPoll(ctx context.Context, interval time.Duration, topic string, pools *database.Pools, sources *communication.Clients, registry *health.Registry) {
 	var pollers sync.WaitGroup
 	pollers.Go(func() {
-		pollSource(ctx, "BMKG", interval, topic, db, registry, func(ctx context.Context, cursors database.Cursors) (processing.Batch, error) {
+		pollSource(ctx, "BMKG", interval, topic, pools, registry, func(ctx context.Context, cursors database.Cursors) (processing.Batch, error) {
 			events, err := sources.BMKG.SeismicEvents(ctx, cursors[database.SeismicFeed])
 			if err != nil {
 				return processing.Batch{}, err
@@ -122,16 +122,16 @@ func startPoll(ctx context.Context, interval time.Duration, topic string, db *sq
 			if err != nil {
 				return processing.Batch{}, err
 			}
-			return processing.AggregateBMKG(ctx, db, events, warnings, cursors)
+			return processing.AggregateBMKG(ctx, pools.Read, events, warnings, cursors)
 		})
 	})
 	pollers.Go(func() {
-		pollSource(ctx, "PVMBG", interval, topic, db, registry, func(ctx context.Context, cursors database.Cursors) (processing.Batch, error) {
+		pollSource(ctx, "PVMBG", interval, topic, pools, registry, func(ctx context.Context, cursors database.Cursors) (processing.Batch, error) {
 			reports, err := sources.PVMBG.VolcanicReports(ctx, cursors[database.VolcanicFeed])
 			if err != nil {
 				return processing.Batch{}, err
 			}
-			return processing.AggregatePVMBG(ctx, db, reports, cursors)
+			return processing.AggregatePVMBG(ctx, pools.Read, reports, cursors)
 		})
 	})
 	pollers.Wait()
@@ -142,13 +142,13 @@ func pollSource(
 	source string,
 	interval time.Duration,
 	topic string,
-	db *sql.DB,
+	pools *database.Pools,
 	registry *health.Registry,
 	fetchAndAggregate func(context.Context, database.Cursors) (processing.Batch, error),
 ) {
 	pollOnce := func() {
 		// Load the last committed source timestamps before requesting new records.
-		cursors, err := database.LoadCursors(ctx, db)
+		cursors, err := database.LoadCursors(ctx, pools.Read)
 		var batch processing.Batch
 		if err == nil {
 			batch, err = fetchAndAggregate(ctx, cursors)
@@ -157,7 +157,7 @@ func pollSource(
 		// Save hazards and advance only this source's cursors in one transaction.
 		if err == nil {
 			var stored int
-			stored, err = database.SaveHazards(ctx, db, batch.Hazards, batch.Cursors, topic)
+			stored, err = database.SaveHazards(ctx, pools.Write, batch.Hazards, batch.Cursors, topic)
 			if err == nil {
 				registry.RecordSuccess(source)
 				log.Printf("%s: stored %d canonical events", source, stored)

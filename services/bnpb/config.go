@@ -10,6 +10,7 @@ import (
 
 type config struct {
 	DBPath                   string
+	DBReadConnections        int
 	BMKGAddress              string
 	BMKGKey                  string
 	PVMBGURL                 string
@@ -30,19 +31,23 @@ type config struct {
 
 func loadConfig() (config, error) {
 	cfg := config{
-		DBPath:        env("DB_PATH", "./data/bnpb.db"),
-		BMKGAddress:   env("BMKG_GRPC_ADDR", "localhost:8081"),
-		BMKGKey:       os.Getenv("BMKG_API_KEY"),
-		PVMBGURL:      env("PVMBG_BASE_URL", "http://localhost:8082"),
-		PVMBGToken:    os.Getenv("PVMBG_TOKEN"),
-		KafkaBrokers:  strings.Split(env("KAFKA_BROKERS", "kafka:9092"), ","),
-		KafkaTopic:    env("KAFKA_TOPIC_HAZARD_EVENTS", "hazard-events"),
-		KafkaClientID: env("KAFKA_CLIENT_ID", "bnpb-aggregator"),
-		HealthAddress: env("HEALTH_ADDR", ":8080"),
-		APIPort:       env("BNPB_API_PORT", "8085"),
+		DBPath:         env("DB_PATH", "./data/bnpb.db"),
+		BMKGAddress:    env("BMKG_GRPC_ADDR", "localhost:8081"),
+		BMKGKey:        os.Getenv("BMKG_API_KEY"),
+		PVMBGURL:       env("PVMBG_BASE_URL", "http://localhost:8082"),
+		PVMBGToken:     os.Getenv("PVMBG_TOKEN"),
+		KafkaBrokers:   strings.Split(env("KAFKA_BROKERS", "kafka:9092"), ","),
+		KafkaTopic:     env("KAFKA_TOPIC_HAZARD_EVENTS", "hazard-events"),
+		KafkaClientID:  env("KAFKA_CLIENT_ID", "bnpb-aggregator"),
+		HealthAddress:  env("HEALTH_ADDR", ":8080"),
+		APIPort:        env("BNPB_API_PORT", "8085"),
 		InternalAPIKey: os.Getenv("INTERNAL_API_KEY"),
 	}
 	var err error
+	cfg.DBReadConnections, err = strconv.Atoi(env("DB_READ_CONNECTIONS", "8"))
+	if err != nil || cfg.DBReadConnections < 1 {
+		return cfg, fmt.Errorf("DB_READ_CONNECTIONS must be a positive integer")
+	}
 	cfg.UpstreamTimeout, err = time.ParseDuration(env("UPSTREAM_TIMEOUT", "5s"))
 	if err != nil || cfg.UpstreamTimeout <= 0 {
 		return cfg, fmt.Errorf("UPSTREAM_TIMEOUT must be a positive duration, such as 5s")

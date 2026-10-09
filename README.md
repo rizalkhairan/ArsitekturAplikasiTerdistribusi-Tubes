@@ -144,6 +144,7 @@ CLI hanya berbicara ke Client-Facing API di `http://localhost:9080`.
 | Variabel | Contoh | Keterangan |
 | --- | --- | --- |
 | `DB_PATH` | `/app/data/bnpb.db` | Canonical Store (SQLite) |
+| `DB_READ_CONNECTIONS` | `8` | Batas koneksi pool baca read-only; pool tulis memakai satu koneksi |
 | `BMKG_GRPC_ADDR` | `bmkg:8081` | Alamat gRPC BMKG |
 | `BMKG_API_KEY` | `local-dev-bmkg-key` | Harus sama dengan BMKG |
 | `PVMBG_BASE_URL` | `http://pvmbg:8082` | Base URL PVMBG |
@@ -316,6 +317,11 @@ Kebijakan: perubahan skema **aditif** didukung; field tak dikenal diteruskan ke
 `attributes`. Perubahan yang menghapus/mengganti tipe field tidak didukung.
 
 ### Problem 2 — Ketahanan & degradasi terkendali
+
+BNPB memakai dua pool SQLite pada database WAL yang sama: satu koneksi tulis
+untuk transaksi hazard/cursor/outbox dan pool baca read-only (default 8 koneksi)
+untuk API, lookup agregasi, cursor, dan query outbox. Pembaca dapat berjalan saat
+transaksi tulis aktif tanpa menunggu koneksi penulis. Kedua poller tetap independen.
 
 **2a. Head-of-line blocking** — dengan PVMBG diperlambat 3 detik, kirim permintaan
 BMKG-only bersamaan dengan permintaan PVMBG; p95 BMKG-only harus tetap < 300 ms.

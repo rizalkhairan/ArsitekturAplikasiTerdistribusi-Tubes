@@ -27,7 +27,7 @@ func TestOutboxRecordMarkedPublishedOnlyAfterSuccessfulPublish(t *testing.T) {
 	db := outboxTestDatabase(t)
 	event := createOutboxEvent(t, db)
 	publisher := &fakePublisher{}
-	worker := OutboxPublisher{DB: db, Publisher: publisher, RetryLimit: 1, RetryBackoff: time.Millisecond}
+	worker := OutboxPublisher{ReadDB: db, WriteDB: db, Publisher: publisher, RetryLimit: 1, RetryBackoff: time.Millisecond}
 
 	if err := worker.publishOne(context.Background(), event); err != nil {
 		t.Fatalf("publishOne() error = %v", err)
@@ -42,7 +42,7 @@ func TestOutboxPublishFailureLeavesRecordPending(t *testing.T) {
 	db := outboxTestDatabase(t)
 	event := createOutboxEvent(t, db)
 	worker := OutboxPublisher{
-		DB: db, Publisher: &fakePublisher{err: errors.New("broker unavailable")},
+		ReadDB: db, WriteDB: db, Publisher: &fakePublisher{err: errors.New("broker unavailable")},
 		RetryLimit: 2, RetryBackoff: time.Millisecond,
 	}
 

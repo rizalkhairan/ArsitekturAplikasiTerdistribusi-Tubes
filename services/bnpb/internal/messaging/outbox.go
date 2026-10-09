@@ -10,7 +10,8 @@ import (
 )
 
 type OutboxPublisher struct {
-	DB           *sql.DB
+	ReadDB       *sql.DB
+	WriteDB      *sql.DB
 	Publisher    Publisher
 	RetryLimit   int
 	RetryBackoff time.Duration
@@ -32,7 +33,7 @@ func (p OutboxPublisher) Run(ctx context.Context) {
 }
 
 func (p OutboxPublisher) publishPending(ctx context.Context) {
-	events, err := database.PendingOutboxEvents(ctx, p.DB, 100)
+	events, err := database.PendingOutboxEvents(ctx, p.ReadDB, 100)
 	if err != nil {
 		if ctx.Err() == nil {
 			log.Printf("outbox query failed: %v", err)
@@ -57,7 +58,7 @@ func (p OutboxPublisher) publishOne(ctx context.Context, event database.OutboxEv
 	for attempt := 1; attempt <= p.RetryLimit; attempt++ {
 		err = p.Publisher.Publish(ctx, event)
 		if err == nil {
-			return database.MarkOutboxEventPublished(ctx, p.DB, event.EventID)
+			return database.MarkOutboxEventPublished(ctx, p.WriteDB, event.EventID)
 		}
 		if attempt < p.RetryLimit {
 			timer := time.NewTimer(p.RetryBackoff)
