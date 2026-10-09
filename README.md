@@ -412,7 +412,7 @@ curl -s -D - -o /dev/null \
     bmkg:8081 bmkg.BMKG/GetSeismicEvents
   ```
 
-- **3b. Scope media** — login media, lalu `GET /hazards` hanya mengembalikan 6 field
+- **3b. Scope media** — login media, lalu `GET /hazards` hanya mengembalikan 7 field
   ringkasan; `?fields=latitude` → `403`.
 
   ```bash
@@ -421,7 +421,7 @@ curl -s -D - -o /dev/null \
     -d '{"username":"media-user","password":"media-pass-2026"}' \
     | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
 
-  # hanya berisi hazard_id, source, hazard_type, severity, area_name, occurred_at
+  # hanya berisi hazard_id, source, hazard_type, severity, area_name, occurred_at, ingested_at
   curl -s 'http://localhost:9080/hazards?limit=1' -H "Authorization: Bearer $TOKEN"
 
   # minta field mentah secara eksplisit → 403

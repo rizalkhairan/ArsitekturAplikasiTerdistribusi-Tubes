@@ -192,9 +192,9 @@ BNPB> login media-user media-pass-2026
 BNPB> hazards 5
 ```
 
-**Expected fields per event:** `hazard_id`, `source`, `hazard_type`, `severity`, `area_name`, `occurred_at`.
+**Expected fields per event:** `hazard_id`, `source`, `hazard_type`, `severity`, `area_name`, `occurred_at`, `ingested_at`.
 
-**Must NOT be present:** `latitude`, `longitude`, `attributes`, `source_ref_id`, `ingested_at`.
+**Must NOT be present:** `latitude`, `longitude`, `attributes`, `source_ref_id`.
 
 ### 3. Field Scope (All Fields)
 
@@ -210,7 +210,7 @@ BNPB> hazards 5
 
 Run `hazards 5` as `media-user`, then `logout` and repeat as `field-user`.
 
-**Expected:** media response has 6 fields per event; field response has 11 fields per event. Same underlying events, different projections.
+**Expected:** media response has 7 fields per event; field response has 11 fields per event. Same underlying events, different projections.
 
 ### 5. Filtering
 
@@ -308,7 +308,7 @@ BNPB> hazards 101
 
 Note: there is intentionally no bare `hazards` command (it is not listed in `help`). It would send `GET /hazards` with no `limit` and return the same 400.
 
-Note: `hazards abc` does **not** return 400 — `abc` is treated as a `severity` filter and returns `200` with a (likely empty) list.
+Note: `hazards abc` returns the same `400 limit must be between 1 and 100` — `abc` is treated as a `severity` filter, but no `limit` is sent, and the server requires `limit` between 1–100.
 
 ### 14. Raw Field Rejection (403) — API Level, Not CLI
 
