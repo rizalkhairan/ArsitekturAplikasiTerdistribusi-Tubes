@@ -460,16 +460,70 @@ curl -s -D - -o /dev/null \
 
 ### Problem 4 — Microservice & flexible storage
 
-- **4a. Independen** — hentikan/rebuild/start satu container tanpa menyentuh yang lain.
-  Contoh: `docker compose stop client-api`; BNPB read API tetap melayani
-  (`curl -H 'X-Internal-Key: local-dev-internal-key' http://localhost:8085/hazards`);
-  lalu `docker compose build client-api && docker compose up -d client-api`. Uptime
-  container lain tidak berubah.
-- **4b. Atribut dinamis** — record sebelum dan sesudah munculnya `confidence_level`
-  tersimpan berdampingan di Canonical Store dan keduanya dapat dibaca (tanpa migrasi).
-- **4c. Kepemilikan store** — `GET http://localhost:8085/hazards` tanpa
-  `X-Internal-Key` → `401`; hanya Aggregator yang memegang volume `bnpb-data`, dan
-  Client-Facing API membaca melalui API Aggregator.
+- **4a. Independen** — catat `StartedAt` container lain, stop/rebuild/start satu
+  container (`--no-deps`); `StartedAt` container lain tidak berubah dan permintaan yang tidak bergantung padanya tetap `200`.
+
+  ```bash
+  docker compose ps
+  docker inspect -f '{{.Name}} {{.State.StartedAt}}' \
+    $(docker compose ps -q bnpb pvmbg bmkg client-api auth kafka)
+
+  docker compose stop notifier
+  KEY='local-dev-internal-key'
+  curl -s -o /dev/null -w 'BNPB   %{http_code}\n' \
+    -H "X-Internal-Key: $KEY" 'http://localhost:8085/hazards?limit=1'
+  TOKEN=$(curl -s -X POST http://localhost:9080/auth/login \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"field-user","password":"field-pass-2026"}' \
+    | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+  curl -s -o /dev/null -w 'client %{http_code}\n' \
+    'http://localhost:9080/hazards?source=BMKG&limit=1' -H "Authorization: Bearer $TOKEN"
+
+  docker compose build notifier
+  docker compose up -d --no-deps notifier
+  docker inspect -f '{{.Name}} {{.State.StartedAt}}' \
+    $(docker compose ps -q bnpb pvmbg bmkg client-api auth kafka)
+  ```
+
+- **4b. Atribut dinamis** — field baru masuk ke JSON `attributes`, bukan kolom baru,
+  tanpa migrasi. Record sebelum & sesudah `confidence_level` tersimpan berdampingan dan
+  keduanya dapat dibaca.
+
+  ```bash
+  KEY='local-dev-internal-key'
+  curl -s -H "X-Internal-Key: $KEY" 'http://localhost:8085/hazards?source=PVMBG&limit=3'   # tanpa confidence_level
+  curl -s -u admin:local-dev-admin-password -X POST http://localhost:8082/admin/schema-version \
+    -H 'Content-Type: application/json' -d '{"enabled":true}'
+  sleep 25
+  curl -s -H "X-Internal-Key: $KEY" 'http://localhost:8085/hazards?source=PVMBG&limit=10'  # ada confidence_level
+
+  VOL=$(docker volume ls --format '{{.Name}}' | grep bnpb-data | head -n1)
+  MSYS_NO_PATHCONV=1 docker run --rm -v "$VOL":/data keinos/sqlite3:latest \
+    sqlite3 -header -column /data/bnpb.db \
+    "SELECT source_ref_id, json_extract(attributes,'\$.confidence_level') AS confidence_level
+       FROM hazard_events WHERE source='PVMBG' ORDER BY occurred_at DESC LIMIT 20;"
+  MSYS_NO_PATHCONV=1 docker run --rm -v "$VOL":/data keinos/sqlite3:latest \
+    sqlite3 /data/bnpb.db ".schema hazard_events"
+  ```
+
+  `MSYS_NO_PATHCONV=1` hanya perlu di Git Bash (Windows); diabaikan di Linux/macOS.
+
+- **4c. Kepemilikan store** — hanya Aggregator yang memegang volume `bnpb-data`; akses
+  langsung ke `:8085` butuh `X-Internal-Key` (`401` tanpa key). Komponen lain membaca
+  lewat API Aggregator (`BNPB_API_URL`).
+
+  ```bash
+  curl -s -o /dev/null -w 'tanpa key %{http_code}\n' http://localhost:8085/hazards
+  curl -s -o /dev/null -w 'key salah %{http_code}\n' \
+    -H 'X-Internal-Key: nope' http://localhost:8085/hazards
+
+  for c in bnpb client-api notifier; do echo "== $c =="; \
+    docker inspect -f '{{range .Mounts}}{{.Name}} -> {{.Destination}}{{"\n"}}{{end}}' \
+    "$(docker compose ps -q $c)"; done
+
+  docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' \
+    "$(docker compose ps -q client-api)" | grep -E '^BNPB_'
+  ```
 
 ### Problem 5 — Event-driven architecture
 
