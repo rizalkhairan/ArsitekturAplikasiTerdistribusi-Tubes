@@ -1215,3 +1215,72 @@ Script ini memvalidasi perilaku pipeline lokal. Broker Compose hanya satu node d
 replication factor 1, sehingga hasil ini tidak membuktikan ketahanan ketika node broker
 hilang; uji tersebut memerlukan cluster Kafka multi-node. Konsumen yang berhenti atau
 restart diuji terpisah dari kegagalan node broker.
+
+## Milestone 2 — P4 satellite stream processor
+
+The P4 service is `services/satellite-processor`. It keeps one SSE connection to the
+satellite feed, persists each input and offset before acknowledging it locally, and
+processes detections by UTC acquisition time. A transactional SQLite state store holds
+the inbox, detection records, cluster lineage, processing checkpoint, and canonical
+write outbox. Contiguous SSE records are committed in bounded SQLite batches with the
+checkpoint in the same transaction; an interrupted batch is replayed from the last
+committed offset. Patch updates are applied to known active detections. Updates whose
+target is absent are skipped and counted as `orphan_updates` so they cannot stall later
+feed records. The service writes versioned wildfire upserts/retractions through the
+canonical API; it never writes directly to Aggregator storage.
+
+The initial allowed lateness is configurable with `SATELLITE_ALLOWED_LATENESS` and is
+set to six hours in local Compose. This is separate from the six-hour maximum time
+difference for connecting two detections. Events arriving beyond the watermark still
+go through the correction path and increment the late-detection count. The built-in
+`/dashboard` and `/metrics` show offsets, backlog, watermark, singleton and late counts,
+active fires, and p95 feed-receipt-to-canonical-ack latency.
+
+### Local P4 acceptance script
+
+Run the local mock scenarios from a Bash shell with Docker Compose, `curl`, and `jq`:
+
+```bash
+bash tools/p4-curl-test.sh
+```
+
+The script builds the P4 processor and runs a local SSE mock plus the M2 canonical
+contract stub. Its numbered checks cover:
+
+| Script check | P4 criterion | What it verifies |
+| --- | --- | --- |
+| P4.1 | Wildfire mapping and deduplication | Cross-satellite grouping, confidence-low exclusion, singleton count, exact detection keys, and mapped fields. |
+| P4.2 | Event-time and late arrivals | Watermark behavior, accepted late correction, and late counter. |
+| P4.3 | Feed updates and retractions | Versioned update, shrinking fire, and retract while retaining fire identity. |
+| P4.4 | 60× burst and catch-up | A 400-event accelerated mock burst, all 200 expected clusters, zero remaining processing lag, elapsed catch-up, and p95. |
+| P4.5 | Processor crash recovery | SIGKILL after a durable input, restart, resume, and one final fire. |
+| P4.6 | Reference comparison | Compares active fires when `P4_REFERENCE_FILE` contains the assistant reference result; otherwise reports a skip. |
+| P4.7 | Live feed | Use `bash tools/p4-curl-test.sh --live` after the exam session is started. Requires the token, province reference, and canonical API settings; reports durable/processed offsets and current lag during the live window. |
+| P4.8 | Feed disconnect and resume | Local test forcibly closes SSE, appends records, then checks that the processor resumes to the latest contiguous offset. |
+
+Local mode uses only test credentials and synthetic province points. It does not contact
+the assistant feed. The live mode never calls `POST /v1/exam/start`; start the exam feed
+at the scheduled demo time before running it. Set these environment variables first:
+
+```bash
+export P4_FEED_TOKEN='<assistant group token>'
+export P4_PROVINCE_FILE='/path/to/bnpb-province-centroids.json'
+export P4_CANONICAL_URL='http://bnpb:8085'
+export P4_CANONICAL_TOKEN='<satellite-processor canonical write token>'
+export P4_FEED_URL='https://satellite.naufarrel.dev'
+export P4_LIVE_SECONDS=180
+bash tools/p4-curl-test.sh --live
+```
+
+The script reads `P4_FEED_TOKEN` from the repository root `.env` when it is not already
+exported in the shell. It never prints the token. P4.7 reports the live offsets and
+backlog at the end of its capture window; P4.4 separately checks recovery from a bounded
+60× burst. The official province-centroid table and deployed canonical API credentials
+are still required for production-valid live mapping and writes.
+
+`P4_REFERENCE_FILE` may point to a JSON file in the script's expected `{"fires":[...]}`
+shape to enable P4.6 comparison. The official province-centroid table and assistant
+reference output are not in this repository; the local test fixture is deliberately
+synthetic and must not be used as production reference data. The local canonical stub
+is in-memory and declares its durability simulated. A live acceptance run must point
+at the deployed A/B canonical API to demonstrate actual canonical persistence.

@@ -246,6 +246,84 @@ services:
       - auth
       - ingest-pipeline
 
+  canonical-contract-stub:
+    image: python:3.12-slim
+    profiles: ["p4-test"]
+    working_dir: /workspace
+    command: ["python", "tools/contract-stub/server.py", "--host", "0.0.0.0", "--port", "8095"]
+    environment:
+      AUDIT_TOKEN: p4-local-audit-token
+      WRITE_TOKEN: p4-local-write-token
+    volumes:
+      - ./tools/contract-stub:/workspace/tools/contract-stub:ro
+      - ./contracts/m2:/workspace/contracts/m2:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8095/health')"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  satellite-mock:
+    image: python:3.12-slim
+    profiles: ["p4-test"]
+    working_dir: /app
+    command: ["python", "server.py"]
+    environment:
+      PORT: 8098
+      SATELLITE_MOCK_TOKEN: local-satellite-test-token
+    volumes:
+      - ./tools/satellite-mock/server.py:/app/server.py:ro
+    ports:
+      - "8098:8098"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost',8098),2).close()"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  satellite-processor:
+    build:
+      context: ./services
+      dockerfile: satellite-processor/Dockerfile
+    profiles: ["p4-test"]
+    environment:
+      SATELLITE_BASE_URL: ${P4_FEED_URL:-http://satellite-mock:8098}
+      SATELLITE_TOKEN: ${P4_FEED_TOKEN:-local-satellite-test-token}
+      SATELLITE_START_OFFSET: ${P4_START_OFFSET:-0}
+      SATELLITE_ALLOWED_LATENESS: 6h
+      SATELLITE_STATE_PATH: /app/data/${P4_DB_FILE:-satellite.db}
+      SATELLITE_HTTP_ADDR: :8080
+      SATELLITE_BATCH_SIZE: 128
+      SATELLITE_RECONNECT_MIN: 200ms
+      SATELLITE_RECONNECT_MAX: 2s
+      CANONICAL_API_URL: ${P4_CANONICAL_URL:-http://canonical-contract-stub:8095}
+      CANONICAL_WRITE_TOKEN: ${P4_CANONICAL_TOKEN:-p4-local-write-token}
+      CANONICAL_PARTITION: SATELIT
+      CANONICAL_EPOCH: 1
+      PROVINCE_CENTROIDS_PATH: /app/config/province-centroids.json
+      P4_TEST_MODE: "true"
+      P4_TEST_TOKEN: local-p4-test-token
+      OTEL_SERVICE_NAME: satellite-processor
+      OTEL_TRACES_EXPORTER: none
+      METRICS_ADDR: :9090
+    volumes:
+      - satellite-data:/app/data
+      - ${P4_PROVINCE_FILE:-./services/satellite-processor/testdata/province-centroids.json}:/app/config/province-centroids.json:ro
+    ports:
+      - "8096:8080"
+      - "9096:9090"
+    depends_on:
+      canonical-contract-stub:
+        condition: service_healthy
+      satellite-mock:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/satellite-processor", "-healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
 volumes:
   kafka-data:
   bmkg-data:
@@ -253,3 +331,4 @@ volumes:
   bnpb-data:
   auth-data:
   ingest-data:
+  satellite-data:
