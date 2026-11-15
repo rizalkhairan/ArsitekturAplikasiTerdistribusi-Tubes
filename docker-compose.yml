@@ -39,6 +39,67 @@ services:
         --topic hazard-events --partitions 3 --replication-factor 1 --config retention.ms=604800000 &&
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists
         --topic hazard-events-dlq --partitions 1 --replication-factor 1 --config retention.ms=604800000
+        && /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists
+        --topic field-reports --partitions 3 --replication-factor 1 --config retention.ms=604800000
+
+  ingest-pipeline:
+    build: ./services/ingest-pipeline
+    environment:
+      PIPELINE_MODE: api
+      HTTP_ADDR: :8094
+      PIPELINE_DB_PATH: /app/data/ingest.db
+      KAFKA_BROKERS: kafka:9092
+      FIELD_REPORT_TOPIC: field-reports
+      FIELD_REPORT_GROUP: field-report-consumer-group
+      FIELD_REPORT_TOKEN: ${FIELD_REPORT_TOKEN:-local-dev-field-report-token}
+      AUDIT_TOKEN: ${AUDIT_TOKEN:-local-dev-audit-token}
+      OPS_TOKEN: ${OPS_TOKEN:-local-dev-ops-token}
+      PIPELINE_INTERNAL_TOKEN: ${PIPELINE_INTERNAL_TOKEN:-local-dev-pipeline-internal-token}
+      BNPB_REPROCESS_URL: http://bnpb:8085
+      BNPB_INTERNAL_KEY: ${INTERNAL_API_KEY}
+      MAX_MESSAGE_BYTES: 262144
+      MAX_QUARANTINE_BYTES: 4194304
+    volumes:
+      - ingest-data:/app/data
+    ports:
+      - "8094:8094"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8094/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
+
+  field-report-consumer:
+    build: ./services/ingest-pipeline
+    environment:
+      PIPELINE_MODE: consumer
+      HTTP_ADDR: :8094
+      PIPELINE_DB_PATH: /app/data/ingest.db
+      KAFKA_BROKERS: kafka:9092
+      FIELD_REPORT_TOPIC: field-reports
+      FIELD_REPORT_GROUP: field-report-consumer-group
+      FIELD_REPORT_TOKEN: ${FIELD_REPORT_TOKEN:-local-dev-field-report-token}
+      AUDIT_TOKEN: ${AUDIT_TOKEN:-local-dev-audit-token}
+      OPS_TOKEN: ${OPS_TOKEN:-local-dev-ops-token}
+      PIPELINE_INTERNAL_TOKEN: ${PIPELINE_INTERNAL_TOKEN:-local-dev-pipeline-internal-token}
+      MAX_MESSAGE_BYTES: 262144
+      MAX_QUARANTINE_BYTES: 4194304
+    volumes:
+      - ingest-data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8094/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      ingest-pipeline:
+        condition: service_healthy
+
 
   bnpb:
     build:
@@ -48,6 +109,8 @@ services:
       - ./services/bnpb/.env
     environment:
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      INGEST_PIPELINE_URL: http://ingest-pipeline:8094
+      PIPELINE_INTERNAL_TOKEN: ${PIPELINE_INTERNAL_TOKEN:-local-dev-pipeline-internal-token}
     volumes:
       - bnpb-data:/app/data
     ports:
@@ -68,6 +131,8 @@ services:
         condition: service_started
       pvmbg:
         condition: service_started
+      ingest-pipeline:
+        condition: service_healthy
 
   dashboard-updater:
     build: ./services/dashboard-updater
@@ -174,9 +239,12 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       BNPB_API_URL: http://bnpb:8085
       BNPB_INTERNAL_KEY: ${INTERNAL_API_KEY}
+      INGEST_PIPELINE_URL: http://ingest-pipeline:8094
+      FIELD_REPORT_TOKEN: ${FIELD_REPORT_TOKEN:-local-dev-field-report-token}
     depends_on:
       - bnpb
       - auth
+      - ingest-pipeline
 
 volumes:
   kafka-data:
@@ -184,3 +252,4 @@ volumes:
   pvmbg-data:
   bnpb-data:
   auth-data:
+  ingest-data:

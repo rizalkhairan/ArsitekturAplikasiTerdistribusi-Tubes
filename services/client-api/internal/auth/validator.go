@@ -23,8 +23,9 @@ func SetMaxTokenAge(d time.Duration) {
 }
 
 type Claims struct {
-	ClientID string
-	Scope    string
+	ClientID   string
+	Scope      string
+	WriteScope string
 }
 
 var jwtSecret []byte
@@ -78,11 +79,11 @@ func ValidateToken(authHeader string) (*Claims, error) {
 	}
 
 	name, _ := claims["name"].(string)
+	writeScope, _ := claims["write_scope"].(string)
 
 	return &Claims{
-		ClientID: name,
-		Scope:    scope,
+		ClientID:   name,
+		Scope:      scope,
+		WriteScope: writeScope,
 	}, nil
 }
-
-

@@ -2,7 +2,9 @@ package processing
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,8 +16,19 @@ import (
 )
 
 type Batch struct {
-	Hazards []database.HazardEvent
-	Cursors database.Cursors
+	Hazards  []database.HazardEvent
+	Cursors  database.Cursors
+	Failures []FailedMessage
+}
+
+// FailedMessage retains an upstream record that failed mapping so the caller can
+// durably park the original bytes before advancing its source cursor.
+type FailedMessage struct {
+	SourceRefID string
+	Raw         []byte
+	Reason      string
+	Retryable   bool
+	ReceivedAt  time.Time
 }
 
 func AggregateBMKG(ctx context.Context, db *sql.DB, events []*pb.SeismicEvent, warnings []*pb.TsunamiWarning, cursors database.Cursors) (Batch, error) {
@@ -33,7 +46,7 @@ func AggregateBMKG(ctx context.Context, db *sql.DB, events []*pb.SeismicEvent, w
 			return Batch{}, err
 		}
 	}
-	
+
 	// A warning can arrive for an event older than the seismic cursor.
 	events, warnings, err := mergeBMKG(ctx, db, events, warnings)
 	if err != nil {
@@ -100,19 +113,25 @@ func seismicHazard(event *pb.SeismicEvent, warnings []*pb.TsunamiWarning) (datab
 func AggregatePVMBG(ctx context.Context, db *sql.DB, reports []json.RawMessage, cursors database.Cursors) (Batch, error) {
 	next := database.Cursors{database.VolcanicFeed: cursors[database.VolcanicFeed]}
 	hazards := make([]database.HazardEvent, 0, len(reports))
-	var failures []error
+	failed := make([]FailedMessage, 0)
 	for i, raw := range reports {
-		hazard, err := volcanicHazard(ctx, db, raw)
-		if err == nil {
-			err = next.Advance(database.VolcanicFeed, hazard.OccurredAt.Format(time.RFC3339Nano))
+		refID, receivedAt := pvmbgIdentityAndTime(raw)
+		if !receivedAt.IsZero() {
+			if err := next.Advance(database.VolcanicFeed, receivedAt.Format(time.RFC3339Nano)); err != nil {
+				return Batch{}, err
+			}
 		}
+		hazard, err := volcanicHazard(ctx, db, raw)
 		if err != nil {
-			failures = append(failures, fmt.Errorf("report %d: %w", i, err))
+			if refID == "" {
+				refID = fmt.Sprintf("unidentified-%d", i)
+			}
+			failed = append(failed, FailedMessage{SourceRefID: refID, Raw: append([]byte(nil), raw...), Reason: "schema_incompatible: " + err.Error(), Retryable: false, ReceivedAt: receivedAt})
 			continue
 		}
 		hazards = append(hazards, hazard)
 	}
-	return Batch{Hazards: hazards, Cursors: next}, errors.Join(failures...)
+	return Batch{Hazards: hazards, Cursors: next, Failures: failed}, nil
 }
 
 func volcanicHazard(ctx context.Context, db *sql.DB, raw json.RawMessage) (database.HazardEvent, error) {
@@ -124,6 +143,22 @@ func volcanicHazard(ctx context.Context, db *sql.DB, raw json.RawMessage) (datab
 	}
 	if err := json.Unmarshal(raw, &report); err != nil {
 		return database.HazardEvent{}, err
+	}
+	if strings.TrimSpace(report.ReportID) == "" {
+		return database.HazardEvent{}, fmt.Errorf("required field report_id is missing or empty")
+	}
+	if strings.TrimSpace(report.VolcanoID) == "" {
+		return database.HazardEvent{}, fmt.Errorf("required field volcano_id is missing or empty")
+	}
+	if strings.TrimSpace(report.AlertLevel) == "" {
+		return database.HazardEvent{}, fmt.Errorf("required field alert_level is missing or empty")
+	}
+	if report.ReportedAt.IsZero() {
+		return database.HazardEvent{}, fmt.Errorf("required field reported_at is missing or invalid")
+	}
+	report.AlertLevel = strings.ToUpper(strings.TrimSpace(report.AlertLevel))
+	if report.AlertLevel != "NORMAL" && report.AlertLevel != "WASPADA" && report.AlertLevel != "SIAGA" && report.AlertLevel != "AWAS" {
+		return database.HazardEvent{}, fmt.Errorf("unsupported alert_level %q", report.AlertLevel)
 	}
 	volcano, err := database.FindVolcano(ctx, db, report.VolcanoID)
 	if err != nil {
@@ -147,4 +182,89 @@ func volcanicHazard(ctx context.Context, db *sql.DB, raw json.RawMessage) (datab
 		Latitude: volcano.Latitude, Longitude: volcano.Longitude,
 		OccurredAt: report.ReportedAt, Attributes: attributes,
 	}, nil
+}
+
+// MapVolcanicReport maps a quarantined report during an explicitly authorized
+// reprocess. v1 is strict; v2 accepts the documented PVMBG rename/type/removal
+// compatibility changes and gives records without report_id a stable raw hash ID.
+func MapVolcanicReport(ctx context.Context, db *sql.DB, raw json.RawMessage, version string) (database.HazardEvent, error) {
+	if version == "" || version == "pvmbg-v1" {
+		return volcanicHazard(ctx, db, raw)
+	}
+	if version != "pvmbg-v2" {
+		return database.HazardEvent{}, fmt.Errorf("unsupported PVMBG processor version %q", version)
+	}
+	if !json.Valid(raw) {
+		return database.HazardEvent{}, fmt.Errorf("invalid JSON report")
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return database.HazardEvent{}, err
+	}
+	var reportID, volcanoID, alertLevel, reportedAt string
+	_ = json.Unmarshal(fields["report_id"], &reportID)
+	_ = json.Unmarshal(fields["volcano_id"], &volcanoID)
+	if len(fields["alert_level"]) > 0 {
+		_ = json.Unmarshal(fields["alert_level"], &alertLevel)
+	}
+	if alertLevel == "" && len(fields["alert_status"]) > 0 {
+		_ = json.Unmarshal(fields["alert_status"], &alertLevel)
+	}
+	if alertLevel == "" && len(fields["alert_level"]) > 0 {
+		var wrapped struct {
+			Level string `json:"level"`
+		}
+		if err := json.Unmarshal(fields["alert_level"], &wrapped); err == nil {
+			alertLevel = wrapped.Level
+		}
+	}
+	_ = json.Unmarshal(fields["reported_at"], &reportedAt)
+	if reportID == "" {
+		sum := sha256.Sum256(raw)
+		reportID = "pvmbg-v2-" + hex.EncodeToString(sum[:])
+	}
+	if volcanoID == "" || alertLevel == "" || reportedAt == "" {
+		return database.HazardEvent{}, fmt.Errorf("required PVMBG fields are still missing")
+	}
+	occurredAt, err := time.Parse(time.RFC3339Nano, reportedAt)
+	if err != nil {
+		return database.HazardEvent{}, fmt.Errorf("reported_at: %w", err)
+	}
+	alertLevel = strings.ToUpper(strings.TrimSpace(alertLevel))
+	if alertLevel != "NORMAL" && alertLevel != "WASPADA" && alertLevel != "SIAGA" && alertLevel != "AWAS" {
+		return database.HazardEvent{}, fmt.Errorf("unsupported alert level %q", alertLevel)
+	}
+	volcano, err := database.FindVolcano(ctx, db, volcanoID)
+	if err != nil {
+		return database.HazardEvent{}, fmt.Errorf("volcano reference %q: %w", volcanoID, err)
+	}
+	attributes := make(map[string]any, len(fields))
+	for key, value := range fields {
+		if key == "report_id" || key == "volcano_id" || key == "alert_level" || key == "alert_status" || key == "reported_at" {
+			continue
+		}
+		var decoded any
+		if err := json.Unmarshal(value, &decoded); err != nil {
+			return database.HazardEvent{}, fmt.Errorf("attribute %s: %w", key, err)
+		}
+		attributes[key] = decoded
+	}
+	return database.HazardEvent{Source: "PVMBG", SourceRefID: reportID, HazardType: "VOLCANIC", Severity: alertLevel, AreaName: volcano.AreaName, Latitude: volcano.Latitude, Longitude: volcano.Longitude, OccurredAt: occurredAt, Attributes: attributes}, nil
+}
+
+func pvmbgIdentityAndTime(raw []byte) (string, time.Time) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		sum := sha256.Sum256(raw)
+		return "raw-" + hex.EncodeToString(sum[:]), time.Time{}
+	}
+	var id string
+	_ = json.Unmarshal(fields["report_id"], &id)
+	if id == "" {
+		sum := sha256.Sum256(raw)
+		id = "pvmbg-v2-" + hex.EncodeToString(sum[:])
+	}
+	var at time.Time
+	_ = json.Unmarshal(fields["reported_at"], &at)
+	return id, at
 }

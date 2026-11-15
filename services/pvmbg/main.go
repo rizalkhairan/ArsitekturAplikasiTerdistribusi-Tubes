@@ -25,9 +25,10 @@ type VolcanicReport struct {
 }
 
 var outage atomic.Bool
-var schemaVersion atomic.Bool
+var schemaMode atomic.Value
 
 func main() {
+	schemaMode.Store("baseline")
 	port := os.Getenv("PORT")
 	dbPath := os.Getenv("DB_PATH")
 
@@ -243,31 +244,28 @@ func volcanicReports(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	if schemaVersion.Load() {
-		type NewReport struct {
-			VolcanicReport
-			ConfidenceLevel float64 `json:"confidence_level"`
+	mode := schemaMode.Load().(string)
+	response := make([]map[string]any, 0, len(reports))
+	for _, report := range reports {
+		item := map[string]any{
+			"report_id": report.ReportID, "volcano_id": report.VolcanoID,
+			"alert_level": report.AlertLevel, "eruption_count_24h": report.EruptionCount24h,
+			"ash_column_height_m": report.AshColumnHeightM, "reported_at": report.ReportedAt,
 		}
-
-		var response []NewReport
-
-		for _, report := range reports {
-			response = append(response, NewReport{
-				VolcanicReport:  report,
-				ConfidenceLevel: 0.90 + rand.Float64()*0.10,
-			})
+		switch mode {
+		case "additive":
+			item["confidence_level"] = 0.90 + rand.Float64()*0.10
+		case "rename":
+			item["alert_status"] = item["alert_level"]
+			delete(item, "alert_level")
+		case "type_change":
+			item["alert_level"] = map[string]any{"level": item["alert_level"]}
+		case "missing_required":
+			delete(item, "report_id")
 		}
-
-		json.NewEncoder(w).Encode(map[string]any{
-			"reports": response,
-		})
-
-		return
+		response = append(response, item)
 	}
-
-	json.NewEncoder(w).Encode(map[string]any{
-		"reports": reports,
-	})
+	json.NewEncoder(w).Encode(map[string]any{"schema_mode": mode, "reports": response})
 }
 
 func schemaVersionHandler(w http.ResponseWriter, r *http.Request) {
@@ -277,16 +275,30 @@ func schemaVersionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var request struct {
-		Enabled bool `json:"enabled"`
+		Enabled *bool  `json:"enabled"`
+		Mode    string `json:"mode"`
 	}
-
-	json.NewDecoder(r.Body).Decode(&request)
-
-	schemaVersion.Store(request.Enabled)
-
-	json.NewEncoder(w).Encode(map[string]bool{
-		"enabled": schemaVersion.Load(),
-	})
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	mode := request.Mode
+	if mode == "" && request.Enabled != nil {
+		if *request.Enabled {
+			mode = "additive"
+		} else {
+			mode = "baseline"
+		}
+	}
+	switch mode {
+	case "baseline", "additive", "rename", "type_change", "missing_required":
+	default:
+		http.Error(w, "mode must be baseline, additive, rename, type_change, or missing_required", http.StatusBadRequest)
+		return
+	}
+	schemaMode.Store(mode)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"mode": mode, "enabled": mode != "baseline"})
 }
 
 func outageHandler(w http.ResponseWriter, r *http.Request) {

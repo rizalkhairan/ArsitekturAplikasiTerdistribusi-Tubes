@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -32,6 +34,7 @@ func main() {
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("POST /auth/login", handleLogin(authProxy))
 	mux.HandleFunc("POST /auth/refresh", handleRefresh(authProxy))
+	mux.HandleFunc("POST /field-reports", authMiddleware(handleFieldReport(cfg)))
 	mux.HandleFunc("GET /hazards", authMiddleware(handleListHazards(bnpbClient, cfg.MaxLimit)))
 	mux.HandleFunc("GET /hazards/{id}", authMiddleware(handleGetHazard(bnpbClient)))
 
@@ -67,6 +70,58 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	server.Shutdown(shutdownCtx)
+}
+
+func handleFieldReport(cfg config) http.HandlerFunc {
+	client := &http.Client{Timeout: cfg.UpstreamTimeout}
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims, _ := r.Context().Value("claims").(*auth.Claims)
+		if claims == nil || claims.WriteScope != "field:write" {
+			writeError(w, http.StatusForbidden, "field:write scope is required")
+			return
+		}
+		if cfg.FieldReportToken == "" {
+			writeError(w, http.StatusServiceUnavailable, "field-report ingest is not configured")
+			return
+		}
+		key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+		if key == "" {
+			writeError(w, http.StatusBadRequest, "Idempotency-Key is required")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 256*1024)
+		payload, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeError(w, http.StatusRequestEntityTooLarge, "field report exceeds 256 KiB")
+			return
+		}
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, strings.TrimRight(cfg.IngestPipelineURL, "/")+"/field-reports", strings.NewReader(string(payload)))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not create ingest request")
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+cfg.FieldReportToken)
+		req.Header.Set("Idempotency-Key", key)
+		req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+		if correlationID := middleware.GetCorrelationID(r.Context()); correlationID != "" {
+			req.Header.Set("X-Correlation-ID", correlationID)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "field-report ingest is unavailable")
+			return
+		}
+		defer resp.Body.Close()
+		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+		if location := resp.Header.Get("Location"); location != "" {
+			w.Header().Set("Location", location)
+		}
+		if correlationID := resp.Header.Get("X-Correlation-ID"); correlationID != "" {
+			w.Header().Set("X-Correlation-ID", correlationID)
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, io.LimitReader(resp.Body, 8192))
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {

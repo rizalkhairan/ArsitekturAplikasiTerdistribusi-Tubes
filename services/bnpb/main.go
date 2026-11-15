@@ -2,10 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -57,7 +63,7 @@ func main() {
 	registry := health.New()
 
 	// Start HTTP read API for Client-Facing API
-	readAPI := api.NewServer(":"+cfg.APIPort, pools.Read, cfg.InternalAPIKey, registry, cfg.StalenessThreshold)
+	readAPI := api.NewServer(":"+cfg.APIPort, pools.Read, pools.Write, cfg.KafkaTopic, cfg.InternalAPIKey, registry, cfg.StalenessThreshold)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -68,7 +74,9 @@ func main() {
 	}()
 
 	var workers sync.WaitGroup
-	workers.Go(func() { startPoll(ctx, cfg.PollInterval, cfg.KafkaTopic, pools, sources, registry) })
+	workers.Go(func() {
+		startPoll(ctx, cfg.PollInterval, cfg.KafkaTopic, pools, sources, registry, cfg.PipelineURL, cfg.PipelineInternalToken)
+	})
 	workers.Go(func() {
 		messaging.OutboxPublisher{
 			ReadDB: pools.Read, WriteDB: pools.Write, Publisher: publisher, RetryLimit: cfg.KafkaPublishRetryLimit,
@@ -110,10 +118,10 @@ func serveHealth(ctx context.Context, address string) {
 	}
 }
 
-func startPoll(ctx context.Context, interval time.Duration, topic string, pools *database.Pools, sources *communication.Clients, registry *health.Registry) {
+func startPoll(ctx context.Context, interval time.Duration, topic string, pools *database.Pools, sources *communication.Clients, registry *health.Registry, pipelineURL, pipelineToken string) {
 	var pollers sync.WaitGroup
 	pollers.Go(func() {
-		pollSource(ctx, "BMKG", interval, topic, pools, registry, func(ctx context.Context, cursors database.Cursors) (processing.Batch, error) {
+		pollSource(ctx, "BMKG", interval, topic, pools, registry, "", "", func(ctx context.Context, cursors database.Cursors) (processing.Batch, error) {
 			events, err := sources.BMKG.SeismicEvents(ctx, cursors[database.SeismicFeed])
 			if err != nil {
 				return processing.Batch{}, err
@@ -126,7 +134,7 @@ func startPoll(ctx context.Context, interval time.Duration, topic string, pools 
 		})
 	})
 	pollers.Go(func() {
-		pollSource(ctx, "PVMBG", interval, topic, pools, registry, func(ctx context.Context, cursors database.Cursors) (processing.Batch, error) {
+		pollSource(ctx, "PVMBG", interval, topic, pools, registry, pipelineURL, pipelineToken, func(ctx context.Context, cursors database.Cursors) (processing.Batch, error) {
 			reports, err := sources.PVMBG.VolcanicReports(ctx, cursors[database.VolcanicFeed])
 			if err != nil {
 				return processing.Batch{}, err
@@ -144,6 +152,8 @@ func pollSource(
 	topic string,
 	pools *database.Pools,
 	registry *health.Registry,
+	pipelineURL string,
+	pipelineToken string,
 	fetchAndAggregate func(context.Context, database.Cursors) (processing.Batch, error),
 ) {
 	pollOnce := func() {
@@ -152,6 +162,15 @@ func pollSource(
 		var batch processing.Batch
 		if err == nil {
 			batch, err = fetchAndAggregate(ctx, cursors)
+		}
+		// Quarantine malformed/incompatible PVMBG records durably before advancing the
+		// source cursor. Repeated polls are safe because each failure has a stable ID.
+		if err == nil && len(batch.Failures) > 0 {
+			for _, failure := range batch.Failures {
+				if err = parkPVMBGFailure(ctx, pipelineURL, pipelineToken, failure); err != nil {
+					break
+				}
+			}
 		}
 
 		// Save hazards and advance only this source's cursors in one transaction.
@@ -188,4 +207,37 @@ func pollSource(
 			return
 		}
 	}
+}
+
+func parkPVMBGFailure(ctx context.Context, baseURL, token string, failure processing.FailedMessage) error {
+	if strings.TrimSpace(baseURL) == "" || strings.TrimSpace(token) == "" {
+		return fmt.Errorf("PVMBG schema failure cannot be skipped: INGEST_PIPELINE_URL and PIPELINE_INTERNAL_TOKEN are required")
+	}
+	h := sha256.New()
+	h.Write([]byte("PVMBG"))
+	h.Write([]byte{0})
+	h.Write([]byte(failure.SourceRefID))
+	h.Write([]byte{0})
+	h.Write(failure.Raw)
+	messageID := hex.EncodeToString(h.Sum(nil))
+	body, err := json.Marshal(map[string]any{"message_id": messageID, "source": "PVMBG", "source_ref_id": failure.SourceRefID, "received_at": failure.ReceivedAt, "reason": failure.Reason, "retryable": failure.Retryable, "attempts": 1, "raw_base64": base64.StdEncoding.EncodeToString(failure.Raw)})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/internal/dlq/park", strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("persist PVMBG failure %s: %w", failure.SourceRefID, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("persist PVMBG failure %s: ingest pipeline returned HTTP %d", failure.SourceRefID, resp.StatusCode)
+	}
+	return nil
 }

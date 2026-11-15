@@ -14,10 +14,10 @@ import (
 )
 
 type Handler struct {
-	db          *sql.DB
-	jwtSecret   []byte
-	accessTTL   time.Duration
-	refreshTTL  time.Duration
+	db         *sql.DB
+	jwtSecret  []byte
+	accessTTL  time.Duration
+	refreshTTL time.Duration
 }
 
 func NewHandler(db *sql.DB, jwtSecret string, accessTTL, refreshTTL time.Duration) *Handler {
@@ -143,12 +143,17 @@ func (h *Handler) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) generateAccessToken(user database.User) (string, error) {
 	now := time.Now()
+	writeScope := ""
+	if user.Category == "field" {
+		writeScope = "field:write"
+	}
 	claims := jwt.MapClaims{
-		"sub":  user.ID,
-		"name": user.Username,
-		"scope": user.Scope,
-		"iat":  now.Unix(),
-		"exp":  now.Add(h.accessTTL).Unix(),
+		"sub":         user.ID,
+		"name":        user.Username,
+		"scope":       user.Scope,
+		"write_scope": writeScope,
+		"iat":         now.Unix(),
+		"exp":         now.Add(h.accessTTL).Unix(),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(h.jwtSecret)

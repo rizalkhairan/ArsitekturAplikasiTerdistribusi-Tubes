@@ -25,3 +25,4 @@ client/target/
 *.log
 
 tests/*
+doc/*

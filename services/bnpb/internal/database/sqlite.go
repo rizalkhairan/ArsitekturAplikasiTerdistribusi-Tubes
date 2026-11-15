@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	_ "modernc.org/sqlite"
 )
@@ -88,6 +89,11 @@ func databaseDSN(path string, readOnly bool) (string, error) {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
 		return "", err
+	}
+	// modernc SQLite treats a Windows drive prefix as a URI authority unless
+	// the path is normalized to the standard file:///C:/... form.
+	if runtime.GOOS == "windows" {
+		absolute = "/" + filepath.ToSlash(absolute)
 	}
 	params := url.Values{}
 	// DSN pragmas apply to every connection, including connections opened later.
