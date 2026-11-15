@@ -1,0 +1,124 @@
+[
+  {
+    "version": 1,
+    "operation": "upsert",
+    "unit": "shard-A",
+    "event": {
+      "hazard_id": "hz-fixture-0",
+      "source": "BMKG",
+      "source_ref_id": "fixture-0",
+      "hazard_type": "SEISMIC",
+      "severity": "SIAGA",
+      "area_name": "Fixture area",
+      "latitude": -2.5,
+      "longitude": 113.8,
+      "occurred_at": "2026-11-12T02:43:00Z",
+      "ingested_at": "2026-11-12T02:51:08Z",
+      "attributes": {
+        "potential_tsunami": true
+      }
+    },
+    "locations": [
+      {
+        "node": "node-control",
+        "unit": "shard-A",
+        "role": "primary"
+      },
+      {
+        "node": "node-app",
+        "unit": "shard-A-r1",
+        "role": "replica"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "operation": "upsert",
+    "unit": "shard-B",
+    "event": {
+      "hazard_id": "hz-fixture-1",
+      "source": "PVMBG",
+      "source_ref_id": "fixture-1",
+      "hazard_type": "VOLCANIC",
+      "severity": "WASPADA",
+      "area_name": "Fixture area",
+      "latitude": -2.5,
+      "longitude": 113.8,
+      "occurred_at": "2026-11-12T02:43:00Z",
+      "ingested_at": "2026-11-12T02:51:08Z",
+      "attributes": {}
+    },
+    "locations": [
+      {
+        "node": "node-app",
+        "unit": "shard-B",
+        "role": "primary"
+      },
+      {
+        "node": "node-store",
+        "unit": "shard-B-r1",
+        "role": "replica"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "operation": "upsert",
+    "unit": "shard-C",
+    "event": {
+      "hazard_id": "hz-fixture-2",
+      "source": "SATELIT",
+      "source_ref_id": "fixture-2",
+      "hazard_type": "WILDFIRE",
+      "severity": "SIAGA",
+      "area_name": "Fixture area",
+      "latitude": -2.5,
+      "longitude": 113.8,
+      "occurred_at": "2026-11-12T02:43:00Z",
+      "ingested_at": "2026-11-12T02:51:08Z",
+      "attributes": {}
+    },
+    "locations": [
+      {
+        "node": "node-store",
+        "unit": "shard-C",
+        "role": "primary"
+      },
+      {
+        "node": "node-control",
+        "unit": "shard-C-r1",
+        "role": "replica"
+      }
+    ]
+  },
+  {
+    "version": 1,
+    "operation": "upsert",
+    "unit": "shard-A",
+    "event": {
+      "hazard_id": "hz-fixture-3",
+      "source": "SENSOR_PANTAI",
+      "source_ref_id": "fixture-3",
+      "hazard_type": "COASTAL",
+      "severity": "AWAS",
+      "area_name": "Fixture area",
+      "latitude": -2.5,
+      "longitude": 113.8,
+      "occurred_at": "2026-11-12T02:43:00Z",
+      "ingested_at": "2026-11-12T02:51:08Z",
+      "attributes": {}
+    },
+    "locations": [
+      {
+        "node": "node-control",
+        "unit": "shard-A",
+        "role": "primary"
+      },
+      {
+        "node": "node-app",
+        "unit": "shard-A-r1",
+        "role": "replica"
+      }
+    ]
+  }
+]

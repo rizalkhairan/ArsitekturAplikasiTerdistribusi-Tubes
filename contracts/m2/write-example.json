@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "operation": "upsert",
+  "authority": {"partition": "SATELIT", "epoch": 1},
+  "correlation_id": "contract-example",
+  "event": {
+    "hazard_type": "WILDFIRE",
+    "severity": "SIAGA",
+    "area_name": "Kalimantan Tengah",
+    "latitude": -2.51234,
+    "longitude": 113.8045,
+    "occurred_at": "2026-11-12T02:43:00Z",
+    "attributes": {"detection_count": 6, "total_frp_mw": 41.45}
+  }
+}
