@@ -1,0 +1,10 @@
+{
+  "k3s_version": "v1.34.1+k3s1",
+  "architecture": "amd64",
+  "manage_control_plane": false,
+  "nodes": [
+    {"name": "node-control", "ssh": "local", "ip": "CHANGE_ME", "kind": "native", "physical_host": "CHANGE_ME", "host_cpu": "CHANGE_ME", "host_ram_gib": 0, "node_cpu": 0, "node_ram_gib": 0},
+    {"name": "node-app", "ssh": "CHANGE_ME", "ip": "CHANGE_ME", "kind": "vm", "physical_host": "CHANGE_ME", "host_cpu": "CHANGE_ME", "host_ram_gib": 0, "node_cpu": 0, "node_ram_gib": 0},
+    {"name": "node-store", "ssh": "CHANGE_ME", "ip": "CHANGE_ME", "kind": "vm", "physical_host": "CHANGE_ME", "host_cpu": "CHANGE_ME", "host_ram_gib": 0, "node_cpu": 0, "node_ram_gib": 0}
+  ]
+}

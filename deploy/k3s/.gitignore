@@ -1,0 +1,9 @@
+/inventory.json
+/kubeconfig
+/.env
+/images.tar
+/images.json
+__pycache__/
+/bootstrap.json
+/.vms/
+/.dev/
