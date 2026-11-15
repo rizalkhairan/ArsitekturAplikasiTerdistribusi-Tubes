@@ -1,0 +1,32 @@
+# Shared configuration baseline. Workload manifests and telemetry backends follow separately.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sistem-informasi-kebencanaan-bnpb
+  labels:
+    app.kubernetes.io/part-of: bnpb
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bnpb-platform
+  namespace: sistem-informasi-kebencanaan-bnpb
+data:
+  BMKG_GRPC_ADDR: bmkg:8081
+  PVMBG_BASE_URL: http://pvmbg:8082
+  BNPB_API_URL: http://bnpb:8085
+  AUTH_SERVICE_URL: http://auth:8000
+  KAFKA_BROKERS: kafka:9092
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bnpb-telemetry
+  namespace: sistem-informasi-kebencanaan-bnpb
+data:
+  DEPLOYMENT_ENVIRONMENT: demo
+  OTEL_TRACES_EXPORTER: otlp
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  BNPB_TRACE_SAMPLE_RATIO: "1"
+  METRICS_ADDR: ":9090"

@@ -8,6 +8,11 @@ untuk dikonsumsi beberapa consumer independen.
 Cakupan: dua instansi sumber (BMKG, PVMBG), dua jenis bencana (seismik, vulkanik),
 BNPB sebagai node koordinasi.
 
+Pengembangan M2 mengacu pada [arsitektur](services/ARCHITECTURE.md),
+[kontrak API kanonik](contracts/m2/README.md), serta
+[konvensi platform dan telemetri](contracts/m2/PLATFORM.md).
+[Helper Go bersama](services/shared/README.md) menyediakan contoh instrumentasi dua service.
+
 ---
 
 ## 1. Arsitektur
