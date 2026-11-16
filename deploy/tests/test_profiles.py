@@ -100,7 +100,7 @@ class DevProfileTest(unittest.TestCase):
     def test_memory_check_fails_before_cluster_creation(self):
         with patch.dict(os.environ, {"DEV_NODES": "1"}), patch.object(dev.manage, "run") as command:
             command.return_value.stdout = json.dumps({"MemTotal": 1800 * 1024 * 1024})
-            with self.assertRaisesRegex(ValueError, "at least 3 GiB"):
+            with self.assertRaisesRegex(ValueError, "at least 4 GiB"):
                 dev.docker_ready()
             self.assertEqual(command.call_count, 1)
 
@@ -143,9 +143,9 @@ class DevProfileTest(unittest.TestCase):
                 for container in deployment["spec"]["template"]["spec"]["containers"]:
                     self.assertIn("memory", container["resources"]["requests"])
 
-    def test_two_node_memory_guard_accepts_three_gib_desktop_usable_memory(self):
+    def test_two_node_memory_guard_accepts_four_gib_desktop_usable_memory(self):
         with patch.dict(os.environ, {"DEV_NODES": "2"}), patch.object(dev.manage, "run") as command:
-            command.return_value.stdout = json.dumps({"MemTotal": 3045281792})
+            command.return_value.stdout = json.dumps({"MemTotal": 4050270208})
             dev.docker_ready()
 
     def test_default_make_shows_help_and_never_bootstraps(self):

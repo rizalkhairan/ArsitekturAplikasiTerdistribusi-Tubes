@@ -20,6 +20,7 @@ spec:
         app.kubernetes.io/component: aggregator
         role: aggregator
     spec:
+      serviceAccountName: bnpb
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       securityContext:
@@ -34,6 +35,8 @@ spec:
         image: bnpb.local/bnpb:dev
         imagePullPolicy: IfNotPresent
         ports:
+        - name: metrics
+          containerPort: 9090
         - name: http
           containerPort: 8085
         - name: health
@@ -47,6 +50,36 @@ spec:
         - configMapRef:
             name: bnpb-config
         env:
+        - name: METRICS_ADDR
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: METRICS_ADDR
+        - name: BNPB_TRACE_SAMPLE_RATIO
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: BNPB_TRACE_SAMPLE_RATIO
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_EXPORTER_OTLP_PROTOCOL
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_EXPORTER_OTLP_ENDPOINT
+        - name: OTEL_TRACES_EXPORTER
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_TRACES_EXPORTER
+        - name: DEPLOYMENT_ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: DEPLOYMENT_ENVIRONMENT
         - name: OTEL_SERVICE_NAME
           value: bnpb
         - name: TZ
@@ -147,6 +180,7 @@ spec:
         app.kubernetes.io/component: api
         role: api
     spec:
+      serviceAccountName: auth
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       securityContext:
@@ -161,6 +195,8 @@ spec:
         image: bnpb.local/auth:dev
         imagePullPolicy: IfNotPresent
         ports:
+        - name: metrics
+          containerPort: 9090
         - name: http
           containerPort: 8000
         resources:
@@ -172,6 +208,36 @@ spec:
         - configMapRef:
             name: auth-config
         env:
+        - name: METRICS_ADDR
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: METRICS_ADDR
+        - name: BNPB_TRACE_SAMPLE_RATIO
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: BNPB_TRACE_SAMPLE_RATIO
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_EXPORTER_OTLP_PROTOCOL
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_EXPORTER_OTLP_ENDPOINT
+        - name: OTEL_TRACES_EXPORTER
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_TRACES_EXPORTER
+        - name: DEPLOYMENT_ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: DEPLOYMENT_ENVIRONMENT
         - name: OTEL_SERVICE_NAME
           value: auth
         - name: TZ
@@ -265,6 +331,7 @@ spec:
         app.kubernetes.io/component: api
         role: api
     spec:
+      serviceAccountName: client-api
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       securityContext:
@@ -279,6 +346,8 @@ spec:
         image: bnpb.local/client-api:dev
         imagePullPolicy: IfNotPresent
         ports:
+        - name: metrics
+          containerPort: 9090
         - name: http
           containerPort: 8080
         resources:
@@ -290,6 +359,36 @@ spec:
         - configMapRef:
             name: client-api-config
         env:
+        - name: METRICS_ADDR
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: METRICS_ADDR
+        - name: BNPB_TRACE_SAMPLE_RATIO
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: BNPB_TRACE_SAMPLE_RATIO
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_EXPORTER_OTLP_PROTOCOL
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_EXPORTER_OTLP_ENDPOINT
+        - name: OTEL_TRACES_EXPORTER
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_TRACES_EXPORTER
+        - name: DEPLOYMENT_ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: DEPLOYMENT_ENVIRONMENT
         - name: OTEL_SERVICE_NAME
           value: client-api
         - name: TZ
@@ -375,6 +474,7 @@ spec:
         app.kubernetes.io/component: mock
         role: mock
     spec:
+      serviceAccountName: bmkg
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       securityContext:
@@ -474,6 +574,7 @@ spec:
         app.kubernetes.io/component: mock
         role: mock
     spec:
+      serviceAccountName: pvmbg
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       securityContext:
@@ -584,6 +685,7 @@ spec:
         app.kubernetes.io/component: broker
         role: broker
     spec:
+      serviceAccountName: kafka
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       securityContext:
@@ -681,6 +783,7 @@ spec:
         app.kubernetes.io/component: processor
         role: consumer
     spec:
+      serviceAccountName: dashboard-updater
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       securityContext:
@@ -779,6 +882,7 @@ spec:
         app.kubernetes.io/component: processor
         role: consumer
     spec:
+      serviceAccountName: notifier
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       securityContext:
@@ -877,6 +981,7 @@ spec:
         app.kubernetes.io/component: processor
         role: consumer
     spec:
+      serviceAccountName: analytics-consumer
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       securityContext:

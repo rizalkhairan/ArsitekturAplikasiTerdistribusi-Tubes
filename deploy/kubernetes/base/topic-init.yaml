@@ -17,6 +17,7 @@ spec:
         role: other
     spec:
       restartPolicy: Never
+      serviceAccountName: topic-init
       automountServiceAccountToken: false
       nodeSelector:
         app-eligible: 'true'

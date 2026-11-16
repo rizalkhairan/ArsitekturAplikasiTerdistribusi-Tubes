@@ -10,6 +10,7 @@ import (
 
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/health"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/middleware"
+	"github.com/rizalkhairan/distributed-system/shared/telemetry"
 )
 
 type Server struct {
@@ -20,19 +21,19 @@ type Server struct {
 	stalenessThreshold time.Duration
 }
 
-func NewServer(addr string, db *sql.DB, internalKey string, registry *health.Registry, stalenessThreshold time.Duration) *Server {
+func NewServer(addr string, db *sql.DB, internalKey string, registry *health.Registry, stalenessThreshold time.Duration, runtimes ...*telemetry.Runtime) *Server {
 	s := &Server{db: db, internalKey: internalKey, health: registry, stalenessThreshold: stalenessThreshold}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /hazards", s.handleListHazards)
 	mux.HandleFunc("GET /hazards/{id}", s.handleGetHazard)
 
-	// Middleware chain: correlation → logging → internal auth → routes
-	handler := middleware.CorrelationID(
-		middleware.Logging(
-			s.internalAuth(mux),
-		),
-	)
+	var handler http.Handler
+	if len(runtimes) > 0 && runtimes[0] != nil {
+		handler = runtimes[0].Mux(mux, s.internalAuth)
+	} else {
+		handler = middleware.CorrelationID(middleware.Logging(s.internalAuth(mux)))
+	}
 
 	s.server = &http.Server{
 		Addr:         addr,

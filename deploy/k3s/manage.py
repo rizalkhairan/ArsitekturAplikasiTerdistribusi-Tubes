@@ -22,7 +22,7 @@ NAMES = ("node-control", "node-app", "node-store")
 APPS = ("bmkg", "pvmbg", "auth", "bnpb", "client-api", "dashboard-updater", "notifier", "analytics-consumer")
 KAFKA = "docker.io/apache/kafka:3.9.0"
 SECRET_KEYS = ("K3S_TOKEN", "BMKG_API_KEY", "PVMBG_TOKEN", "ADMIN_PASSWORD", "JWT_SECRET",
-               "MEDIA_USER_PASSWORD", "FIELD_USER_PASSWORD", "INTERNAL_USER_PASSWORD", "INTERNAL_API_KEY")
+               "MEDIA_USER_PASSWORD", "FIELD_USER_PASSWORD", "INTERNAL_USER_PASSWORD", "INTERNAL_API_KEY", "GRAFANA_ADMIN_PASSWORD")
 PATHS = {
     "node-control": ("bnpb-m1", "auth", "canonical-a-primary", "canonical-c-replica"),
     "node-app": ("bmkg", "kafka", "canonical-a-replica", "canonical-b-primary"),
@@ -33,7 +33,8 @@ PATHS = {
 def run(args, *, data=None, capture=False, binary=False, env=None):
     """Never print stdin: provisioning config and Secret manifests contain secrets."""
     return subprocess.run([str(a) for a in args], input=data, check=True,
-                          text=not binary, stdout=subprocess.PIPE if capture else None, env=env)
+                          text=not binary, stdout=subprocess.PIPE if capture else None,
+                          stderr=subprocess.PIPE if capture else None, env=env)
 
 
 def private_write(path, content):
@@ -49,6 +50,13 @@ def init():
     env = HERE / ".env"
     if not env.exists():
         private_write(env, "".join(f"{key}={secrets.token_hex(32)}\n" for key in SECRET_KEYS))
+    else:
+        # Add only the new telemetry credential; never regenerate existing keys.
+        if env.stat().st_mode & 0o077:
+            raise ValueError("Credentials must be private: chmod 600 deploy/k3s/.env")
+        if not any(line.startswith("GRAFANA_ADMIN_PASSWORD=") for line in env.read_text().splitlines()):
+            with env.open("a") as stream:
+                stream.write("\nGRAFANA_ADMIN_PASSWORD=" + secrets.token_hex(32) + "\n")
     print("Local inventory and credentials are ready. Fill inventory.json before provisioning.")
 
 
@@ -254,6 +262,7 @@ def render(tag="dev"):
 def apply_secrets(creds, apply=None):
     apply = apply or kubectl
     definitions = {
+        "bnpb-grafana-auth": {"admin-password": creds["GRAFANA_ADMIN_PASSWORD"]},
         "bnpb-bmkg-auth": {"api-key": creds["BMKG_API_KEY"]},
         "bnpb-pvmbg-auth": {"token": creds["PVMBG_TOKEN"]},
         "bnpb-pvmbg-admin": {"username": "admin", "password": creds["ADMIN_PASSWORD"]},
@@ -292,13 +301,15 @@ def images(architecture=None):
     for name in APPS:
         image = f"bnpb.local/{name}:{tag}"
         directory = ROOT / "services" / name
-        context = ROOT / "services" if name == "bnpb" else directory
+        context = ROOT / "services" if name in ("bnpb", "auth", "client-api") else directory
         print(f"Building {name}", flush=True)
         run(["docker", "build", "--platform", "linux/" + architecture, "-t", image,
              "-f", directory / "Dockerfile", context])
         built.append(image)
-    run(["docker", "pull", "--platform", "linux/" + architecture, KAFKA])
-    built.append(KAFKA)
+    from observability import IMAGES
+    for image in (KAFKA, *IMAGES.values()):
+        run(["docker", "pull", "--platform", "linux/" + architecture, image])
+        built.append(image)
     archive = archive_path()
     # Containerd image stores may retain multi-platform indexes after a single-
     # platform pull. Export only complete target-platform manifests for ctr/kind.
@@ -318,16 +329,20 @@ def image_bundle(inv):
         raise ValueError("Invalid image bundle tag")
     if metadata.get("architecture") != inv["architecture"]:
         raise ValueError("Image bundle architecture does not match inventory")
-    expected = {f"bnpb.local/{name}:{tag}" for name in APPS} | {KAFKA}
+    from observability import IMAGES
+    expected = {f"bnpb.local/{name}:{tag}" for name in APPS} | {KAFKA} | set(IMAGES.values())
     if set(metadata.get("images", [])) != expected:
-        raise ValueError("Image bundle must include all application images and Kafka")
+        raise ValueError("Image bundle must include application, Kafka and observability images")
     if metadata.get("sha256") != file_sha256(archive):
         raise ValueError("Image bundle checksum mismatch")
     return archive, tag
 
 
 def deploy():
-    inv, creds = inventory(), credentials()
+    inv = inventory()
+    if (HERE / ".env").exists():
+        init()  # Add telemetry credentials; never recreate missing application keys.
+    creds = credentials()
     if os.getenv("BUILD_IMAGES") == "1":
         images()
     archive, tag = image_bundle(inv)
@@ -343,6 +358,8 @@ def deploy():
             subprocess.run(args, stdin=stream, check=True)
     namespace = {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": NS}}
     kubectl("apply", "-f", "-", data=json.dumps(namespace))
+    from security import install
+    install(kubectl)
     apply_secrets(creds)
     kubectl("apply", "-f", "-", data=manifests)
     kubectl("-n", NS, "rollout", "status", "deployment/kafka", "--timeout=240s")
@@ -352,6 +369,8 @@ def deploy():
     kubectl("-n", NS, "wait", "--for=condition=complete", "job/topic-init", "--timeout=240s")
     for name in APPS:
         kubectl("-n", NS, "rollout", "status", "deployment/" + name, "--timeout=240s")
+    from observability import install as install_observability
+    install_observability(kubectl)
     kubectl("-n", NS, "get", "pods", "-o", "wide")
     print(f"Baseline deployed. Client API: http://{inv['nodes'][0]['ip']}:30080")
 

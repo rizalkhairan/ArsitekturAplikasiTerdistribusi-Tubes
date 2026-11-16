@@ -1,10 +1,12 @@
 FROM golang:1.26-alpine AS builder
 
 WORKDIR /src/client-api
-COPY go.mod go.sum ./
+COPY client-api/go.mod client-api/go.sum ./
+COPY shared/go.mod shared/go.sum /src/shared/
 RUN go mod download
 
-COPY . ./
+COPY client-api/ ./
+COPY shared/ /src/shared/
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/client-api .
 
 FROM alpine:3.22

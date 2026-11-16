@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import tempfile
 import subprocess
+import sys
 import types
 import unittest
 from unittest.mock import patch
@@ -16,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("platform_manage", ROOT / "deploy/k3s/manage.py")
 manage = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(manage)
+sys.path.insert(0, str(ROOT / "deploy/k3s"))
+import observability
 
 
 def example_inventory():
@@ -192,7 +195,7 @@ class ProvisioningTest(unittest.TestCase):
             path = Path(tmp, "images.tar")
             path.write_bytes(b"test bundle")
             metadata = {"tag": "test", "architecture": "amd64", "sha256": manage.file_sha256(path),
-                        "images": [f"bnpb.local/{name}:test" for name in manage.APPS] + [manage.KAFKA]}
+                        "images": [f"bnpb.local/{name}:test" for name in manage.APPS] + [manage.KAFKA] + list(observability.IMAGES.values())}
             path.with_suffix(".json").write_text(json.dumps(metadata))
             self.assertEqual(manage.image_bundle({"architecture": "amd64"}), (path, "test"))
             with self.assertRaises(ValueError):

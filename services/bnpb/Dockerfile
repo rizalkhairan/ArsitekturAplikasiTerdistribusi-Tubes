@@ -4,10 +4,12 @@ FROM golang:1.26-alpine AS builder
 WORKDIR /src/bnpb
 COPY bmkg/go.mod bmkg/go.sum /src/bmkg/
 COPY bnpb/go.mod bnpb/go.sum ./
+COPY shared/go.mod shared/go.sum /src/shared/
 RUN go mod download
 
 COPY bmkg/proto /src/bmkg/proto
 COPY bnpb/ ./
+COPY shared/ /src/shared/
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/bnpb .
 
 FROM alpine:3.22

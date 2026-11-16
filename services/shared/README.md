@@ -3,9 +3,8 @@
 Module: `github.com/rizalkhairan/distributed-system/shared`. Supplies structured
 JSON logging, Prometheus metrics, OpenTelemetry server/client spans, and shared
 context propagation. [Platform conventions](../../contracts/m2/PLATFORM.md) define
-cluster names, ports, credentials and telemetry fields. Existing services adopt
-this module when their instrumentation is integrated; this change adds no implicit
-global providers or middleware to the running M1 applications.
+cluster names, ports, credentials and telemetry fields. Client API, Auth and Aggregator read HTTP use this module. Other services adopt
+it with their pipeline instrumentation; providers remain explicit.
 
 From another `services/<component>` Go module:
 
@@ -22,10 +21,17 @@ HTTP management server. Use `t.Transport(nil)` in a timeout-configured client,
 Pass `t.Provider` explicitly to additional OTel instrumentors. Always close
 HTTP response bodies and call `t.Shutdown` with a bounded context on exit.
 
+`telemetry.StartService(ctx, service)` applies a local service-name default and
+starts the separate metrics listener (`METRICS_ADDR`, default `:9090`). Use
+`t.Mux(mux, middleware...)` to record bounded ServeMux patterns, including auth
+and overload rejections, while preserving `PathValue`. Health routes stay outside
+request telemetry. Cancel the service context, drain HTTP, then call `t.Flush()`
+to flush traces with a fresh bounded context.
+
 Docker builds adopting this local replacement must use `services/` as context,
 copy `shared/go.mod` and `shared/go.sum` before dependency resolution, and copy
 the shared source before compiling. Update the component's Compose build context
-and Dockerfile together; existing component images remain unchanged until adoption.
+and Dockerfile together; Client API/Auth/Aggregator build definitions already use this context.
 
 Run two example processes from `services/shared`, one terminal each:
 

@@ -4,26 +4,30 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"time"
 
 	"github.com/rizalkhairan/distributed-system/client-api/internal/middleware"
+	"github.com/rizalkhairan/distributed-system/shared/telemetry"
 )
 
 type Client struct {
-	baseURL    string
-	http       *http.Client
+	baseURL     string
+	http        *http.Client
 	internalKey string
 }
 
-func NewClient(baseURL string, timeout time.Duration, internalKey string) *Client {
-	return &Client{
-		baseURL:    baseURL,
-		http:       &http.Client{Timeout: timeout},
+func NewClient(baseURL string, timeout time.Duration, internalKey string, runtimes ...*telemetry.Runtime) *Client {
+	client := &Client{
+		baseURL:     baseURL,
+		http:        &http.Client{Timeout: timeout},
 		internalKey: internalKey,
 	}
+	if len(runtimes) > 0 && runtimes[0] != nil {
+		client.http.Transport = runtimes[0].Transport(nil)
+	}
+	return client
 }
 
 // Hazard represents the canonical hazard event from BNPB Aggregator.
@@ -94,16 +98,11 @@ func (c *Client) ListHazards(ctx context.Context, source, severity, since string
 		req.Header.Set("X-Internal-Key", c.internalKey)
 	}
 
-	start := time.Now()
 	resp, err := c.http.Do(req)
-	latency := time.Since(start)
 	if err != nil {
-		log.Printf(`{"corr_id":"%s","method":"GET","path":%q,"latency_ms":%d,"error":"%s"}`, corrID, u.String(), latency.Milliseconds(), err.Error())
 		return nil, nil, fmt.Errorf("bnpb list: %w", err)
 	}
 	defer resp.Body.Close()
-
-	log.Printf(`{"corr_id":"%s","method":"GET","path":%q,"status":%d,"latency_ms":%d}`, corrID, u.String(), resp.StatusCode, latency.Milliseconds())
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, resp.Header, fmt.Errorf("bnpb list: status %d", resp.StatusCode)
@@ -131,16 +130,11 @@ func (c *Client) GetHazard(ctx context.Context, id string) (*Hazard, http.Header
 		req.Header.Set("X-Internal-Key", c.internalKey)
 	}
 
-	start := time.Now()
 	resp, err := c.http.Do(req)
-	latency := time.Since(start)
 	if err != nil {
-		log.Printf(`{"corr_id":"%s","method":"GET","path":%q,"latency_ms":%d,"error":"%s"}`, corrID, "/hazards/"+id, latency.Milliseconds(), err.Error())
 		return nil, nil, fmt.Errorf("bnpb get: %w", err)
 	}
 	defer resp.Body.Close()
-
-	log.Printf(`{"corr_id":"%s","method":"GET","path":%q,"status":%d,"latency_ms":%d}`, corrID, "/hazards/"+id, resp.StatusCode, latency.Milliseconds())
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, resp.Header, fmt.Errorf("hazard not found")

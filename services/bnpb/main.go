@@ -16,9 +16,18 @@ import (
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/health"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/messaging"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/processing"
+	"github.com/rizalkhairan/distributed-system/shared/telemetry"
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	t, err := telemetry.StartService(ctx, "bnpb")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer t.Flush()
+
 	cfg, err := loadConfig()
 	if err != nil {
 		log.Fatal(err)
@@ -50,14 +59,12 @@ func main() {
 	defer publisher.Close()
 
 	log.Printf("BNPB initialized kafka_topic=%s kafka_client_id=%s", cfg.KafkaTopic, cfg.KafkaClientID)
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	// Track upstream freshness so the read API can mark stale Canonical data.
 	registry := health.New()
 
 	// Start HTTP read API for Client-Facing API
-	readAPI := api.NewServer(":"+cfg.APIPort, pools.Read, cfg.InternalAPIKey, registry, cfg.StalenessThreshold)
+	readAPI := api.NewServer(":"+cfg.APIPort, pools.Read, cfg.InternalAPIKey, registry, cfg.StalenessThreshold, t)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {

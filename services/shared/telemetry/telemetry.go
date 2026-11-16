@@ -89,7 +89,9 @@ func New(cfg Config) (*Runtime, error) {
 // FromEnv supports none (local default), stdout, or OTLP/HTTP using standard
 // OTEL_EXPORTER_OTLP_* variables. A bounded batch queue keeps exporter failures
 // off the synchronous request path. Errors never include credentials.
-func FromEnv(ctx context.Context) (*Runtime, error) {
+func FromEnv(ctx context.Context) (*Runtime, error) { return fromEnv(ctx, "") }
+
+func fromEnv(ctx context.Context, defaultService string) (*Runtime, error) {
 	ratio := 1.0
 	if value := os.Getenv("BNPB_TRACE_SAMPLE_RATIO"); value != "" {
 		var err error
@@ -99,6 +101,9 @@ func FromEnv(ctx context.Context) (*Runtime, error) {
 		}
 	}
 	service := os.Getenv("OTEL_SERVICE_NAME")
+	if service == "" {
+		service = defaultService
+	}
 	if service == "" {
 		return nil, fmt.Errorf("OTEL_SERVICE_NAME required")
 	}

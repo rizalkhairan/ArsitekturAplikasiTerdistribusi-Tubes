@@ -148,7 +148,9 @@ services:
       - pvmbg-data:/app/data
 
   auth:
-    build: ./services/auth
+    build:
+      context: ./services
+      dockerfile: auth/Dockerfile
     ports:
       - "8000:8000"
     environment:
@@ -164,7 +166,9 @@ services:
       - auth-data:/app/data
 
   client-api:
-    build: ./services/client-api
+    build:
+      context: ./services
+      dockerfile: client-api/Dockerfile
     ports:
       - "9080:8080"
     env_file:

@@ -27,8 +27,8 @@ The development kubeconfig is `deploy/k3s/.dev/kubeconfig`.
 
 Local PV affinity and data directories follow this mapping; stateless pods use
 eligible nodes. Replica counts and resource settings remain unchanged. All kind
-nodes share Docker's memory and kernel. Allow Docker Desktop 3GiB for one/two
-nodes or 4GiB for three; startup checks usable memory before building.
+nodes share Docker's memory and kernel. Allow Docker Desktop 4GiB for one/two
+nodes or 5GiB for three; startup checks usable memory before building.
 
 Changing the count/image requires `make dev-down` first. **This deletes the
 cluster and its container-local data.** Kind profiles are for development and
@@ -96,5 +96,112 @@ The baseline runs one SQLite-backed Aggregator and a single Kafka broker.
 Do not increase stateful replicas without implementing coordination/replication.
 Six canonical PV/PVC pairs reserve the planned PostgreSQL/Citus placement;
 reserved volumes do not establish replication or recovery guarantees. Data uses
-node-local disks with Retain policies. Service isolation, Tester Agent,
-observability and the remaining pipeline components require separate integration.
+node-local disks with Retain policies. Remaining pipeline components require
+separate integration.
+
+## Storage isolation and Tester Agent
+
+Deployment applies the [assignment-pinned manifest](https://raw.githubusercontent.com/susTuna/if4031-tester-agent/ebb55261711123a9a211739ffbf140a275caa6da/manifest.yaml)
+from `deploy/tester-agent/manifest.yaml` unchanged, outside Kustomize. Its SHA-256
+is checked before installation. No fault scenario runs automatically.
+
+```bash
+make tester-install                       # Also included in deploy/dev-up
+make tester-check                         # Every node ready, RBAC, /app list on each node
+make isolation-check                      # Admission, RBAC and live network probes
+# Append SECURITY_PROFILE=--dev to use deploy/k3s/.dev/kubeconfig.
+```
+
+Requires Kubernetes 1.30+ with ValidatingAdmissionPolicy enabled and an enforcing
+NetworkPolicy controller. [K3s includes network policy enforcement](https://docs.k3s.io/networking/networking-services#network-policy-controller);
+do not disable it. `dev-up` adds kube-router v2.6.2 in
+[firewall-only mode](https://www.kube-router.io/docs/user-guide/#running-as-agent)
+to enforce policies alongside kindnet and kube-proxy. For an existing kind cluster,
+run `make dev-network` before the checks; this preserves its CNI and node data.
+The controller image requires registry access or a preloaded image. It is a
+system DaemonSet in `kube-system`, outside the application overlay and VM profile.
+`isolation-check` requires a healthy baseline, administrative impersonation rights
+and the images' existing `wget`.
+It performs server dry-runs and bounded HTTP probes without creating pods,
+mounting private volumes, reading Secrets or triggering faults. Run `dev-smoke`
+after deployment as well. Rendering/static checks do not establish enforcement.
+
+Each current component has a distinct ServiceAccount, no API grants and no mounted
+API token. Admission restricts claims and Secret references to the owning service
+(including init containers), checks identity/role labels and rejects host access,
+privileged capabilities, indirect Secret volumes and ephemeral containers.
+SQLite databases remain embedded in their owner; there is no database socket or
+password to share. Existing JWT/upstream/internal API trust relationships remain
+explicit Secret allowlists. Database transport credentials and grants belong with
+the actual PostgreSQL/Patroni provisioning; reserved canonical volumes remain
+unmounted and cannot be borrowed. RWO alone does not enforce service ownership;
+the admission policy supplies that boundary. Cluster administrators remain trusted.
+
+Ingress defaults to deny. Allowed paths cover Client API → Auth/Aggregator,
+Aggregator → mocks/broker, consumers/topic creation → broker, and Prometheus
+scrapes. Reserved stores accept SQL from Aggregator and SQL/Patroni traffic
+between stores. Tester Agent has unrestricted application ingress; its namespace,
+privileged pod, host mounts, tolerations and supplied RBAC remain untouched.
+Egress remains available for DNS, external feeds, Kubernetes coordination and
+telemetry. No application policy targets system or Tester Agent namespaces.
+
+B/C integration keeps the current broker/consumer/topic-init names and resource
+classes. Proposed field-report and satellite callers have Aggregator/broker
+network paths reserved. Before adding their workloads, register their identities,
+private claims and Secret references in `identities.yaml` and `admission.yaml`;
+add narrowly scoped ingress for the supplied sensor's actual listener. Coordination
+API permissions, broker authentication/replication and pipeline-state volumes
+require B/C's concrete manifests; no shared credential or privileged bypass is
+provided. Preserve `role=store` for future databases and separate replication
+credentials from Aggregator credentials as specified in the architecture.
+
+VM/demo validation remains pending. Re-run Agent discovery, isolation and smoke
+checks on the separate-kernel topology before running practice scenarios. Practice
+names come from `make tester-check`; run an explicitly chosen scenario with
+`kubectl --kubeconfig deploy/k3s/kubeconfig exec -n tester-agent daemonset/tester-agent -- /app run practice <name>`.
+
+
+## Operational telemetry
+
+`make deploy` / `make dev-up` also install Prometheus, Grafana, Tempo, Loki,
+OpenTelemetry Collector and Alloy. Rebuild the image bundle after this change;
+it now includes the six pinned telemetry images. The stack adds **768Mi requested,
+1536Mi limited RAM**, with one replica per component, preferring the control plane.
+Application namespace/role labels and resource classes remain unchanged.
+Standalone `observability-install` assumes the updated base manifests and Secrets
+have already been applied.
+
+```bash
+make observability-render                         # Inspect the separate overlay
+make observability-validate                       # Pinned binaries validate configs (Docker)
+make observability-check OBSERVABILITY_PROFILE=--dev
+make telemetry-smoke OBSERVABILITY_PROFILE=--dev   # Real request, metrics, trace and log evidence
+make observability-forward OBSERVABILITY_PROFILE=--dev
+```
+
+Grafana opens at `http://localhost:3000`, username `admin`; its generated password
+is `GRAFANA_ADMIN_PASSWORD` in private `deploy/k3s/.env`. Configuration upgrades
+add this credential without rotating existing keys. The provisioned **BNPB service
+operations** dashboard shows throughput, 5xx fraction, p95 latency, scrape
+availability and correlation-ID log searches. Explore includes Prometheus, Tempo
+and Loki; a structured log's TraceID links to Tempo. Backends are ClusterIP-only.
+
+Client API, Aggregator read HTTP and Auth now use the shared telemetry helper,
+including trace propagation on both Client API upstreams. Their metrics use
+internal port 9090; the public Client API Service exposes no metrics port.
+The smoke check authenticates with a temporary access token, sends a uniquely
+identified hazard query and waits up to 60 seconds for both services to appear
+in Prometheus, the same Tempo trace and Loki logs. It prints IDs, never credentials.
+
+Alloy reads pod logs through namespace-scoped `pods`/`pods/log` permissions and
+an explicitly projected token. It mounts no node/application disk. Log bodies
+retain correlation/trace IDs as searchable JSON fields, avoiding high-cardinality
+index labels. Other application accounts retain no API token or grants.
+
+Prometheus/Tempo retain six hours; Loki retains 24 hours. Each backend uses private
+`emptyDir` storage with a 1Gi budget: restart/eviction loses its history. This
+single-instance stack provides no HA or evidence of capacity under demo load.
+BMKG/PVMBG, Kafka and consumer/pipeline instrumentation remain their owners'
+integration work; unavailable scrape targets stay visible. HTTP read traces do
+not establish polling or asynchronous-message trace propagation. Live cluster
+checks and separate-kernel VM/demo evidence remain required.

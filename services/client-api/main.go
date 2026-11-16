@@ -16,17 +16,26 @@ import (
 	"github.com/rizalkhairan/distributed-system/client-api/internal/bnpb"
 	"github.com/rizalkhairan/distributed-system/client-api/internal/filter"
 	"github.com/rizalkhairan/distributed-system/client-api/internal/middleware"
+	"github.com/rizalkhairan/distributed-system/shared/telemetry"
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	t, err := telemetry.StartService(ctx, "client-api")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer t.Flush()
+
 	cfg := loadConfig()
 
 	if err := initAuth(cfg); err != nil {
 		log.Fatalf("Auth initialization failed: %v", err)
 	}
 
-	bnpbClient := bnpb.NewClient(cfg.BNPBURL, cfg.UpstreamTimeout, cfg.BNPBInternalKey)
-	authProxy := auth.NewAuthProxy(cfg.AuthServiceURL)
+	bnpbClient := bnpb.NewClient(cfg.BNPBURL, cfg.UpstreamTimeout, cfg.BNPBInternalKey, t)
+	authProxy := auth.NewAuthProxy(cfg.AuthServiceURL, t)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
@@ -35,13 +44,8 @@ func main() {
 	mux.HandleFunc("GET /hazards", authMiddleware(handleListHazards(bnpbClient, cfg.MaxLimit)))
 	mux.HandleFunc("GET /hazards/{id}", authMiddleware(handleGetHazard(bnpbClient)))
 
-	// Middleware chain: correlation → logging → rate limit → routes
 	rateLimiter := middleware.NewRateLimiter(cfg.MaxConcurrent)
-	handler := middleware.CorrelationID(
-		middleware.Logging(
-			rateLimiter.Middleware(mux),
-		),
-	)
+	handler := t.Mux(mux, rateLimiter.Middleware)
 
 	server := &http.Server{
 		Addr:         ":" + cfg.Port,
@@ -52,8 +56,6 @@ func main() {
 	}
 
 	// Graceful shutdown
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	go func() {
 		log.Printf("Client-Facing API listening on :%s", cfg.Port)
@@ -95,7 +97,7 @@ func handleLogin(proxy *auth.AuthProxy) http.HandlerFunc {
 			return
 		}
 
-		result, err := proxy.Login(middleware.GetCorrelationID(r.Context()), req.Username, req.Password)
+		result, err := proxy.LoginContext(r.Context(), req.Username, req.Password)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, err.Error())
 			return
@@ -119,7 +121,7 @@ func handleRefresh(proxy *auth.AuthProxy) http.HandlerFunc {
 			return
 		}
 
-		result, err := proxy.Refresh(middleware.GetCorrelationID(r.Context()), req.RefreshToken)
+		result, err := proxy.RefreshContext(r.Context(), req.RefreshToken)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, err.Error())
 			return

@@ -94,11 +94,18 @@ def wait_control_plane():
 
 def docker_ready():
     info = json.loads(manage.run(["docker", "info", "--format", "{{json .}}"], capture=True).stdout)
-    # Leave capacity for Kubernetes system pods as well as the 1536Mi application requests.
-    minimum = {1: 2560, 2: 2816, 3: 3584}[count()] * 1024 * 1024
+    # Budget application requests, six telemetry pods, policy enforcement and Kubernetes.
+    minimum = {1: 3584, 2: 3584, 3: 4608}[count()] * 1024 * 1024
     if info.get("MemTotal", 0) < minimum:
-        setting = 3 if count() <= 2 else 4
+        setting = 4 if count() <= 2 else 5
         raise ValueError(f"Docker has too little memory for this profile. Allocate at least {setting} GiB in Docker Desktop Resources, apply/restart, and retry")
+
+
+def network():
+    """Add policy enforcement to kind without replacing its CNI or node data."""
+    kube('get', 'nodes', capture=True)
+    kube('apply', '-f', manage.ROOT / 'deploy/kubernetes/dev/network-policy.yaml')
+    kube('-n', 'kube-system', 'rollout', 'status', 'daemonset/bnpb-network-policy', '--timeout=60s')
 
 
 def up():
@@ -154,9 +161,12 @@ def up():
     for index, node in enumerate(node_names()):
         kube("label", "node", node, "store-eligible=true", "aggregator-eligible=true",
              "app-eligible=" + ("false" if index == 2 else "true"), "--overwrite")
+    network()
     manage.init()  # Credentials shared with local application development, never kubeconfig.
     # Credential creation is transport-independent; use the isolated dev kubeconfig.
     kube("apply", "-f", "-", data=json.dumps({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": manage.NS}}))
+    from security import install
+    install(kube)
     manage.apply_secrets(manage.credentials(), apply=kube)
     kube("apply", "-f", "-", data=manifests)
     kube("-n", manage.NS, "rollout", "status", "deployment/kafka", "--timeout=240s")
@@ -165,6 +175,8 @@ def up():
     kube("-n", manage.NS, "wait", "--for=condition=complete", "job/topic-init", "--timeout=240s")
     for name in manage.APPS:
         kube("-n", manage.NS, "rollout", "status", "deployment/" + name, "--timeout=240s")
+    from observability import install as install_observability
+    install_observability(kube)
     print("Development cluster is ready. Use the dedicated kubeconfig in deploy/k3s/.dev/kubeconfig.")
 
 
@@ -248,7 +260,7 @@ def smoke():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("up", "down", "render", "smoke", "forward"))
+    parser.add_argument("action", choices=("up", "down", "render", "smoke", "forward", "network"))
     args = parser.parse_args()
     try:
         if args.action == "render":

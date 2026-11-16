@@ -20,7 +20,13 @@ help:
 	@echo 'make dev-smoke      Check login, ingestion and access scopes in development'
 	@echo 'make dev-forward    Expose development API at http://localhost:9080'
 	@echo 'make vm-stop        Gracefully stop managed worker VMs'
+	@echo 'make observability-forward  Open a localhost Grafana tunnel (OBSERVABILITY_PROFILE=--dev for kind)'
+	@echo 'make observability-check    Check telemetry backend readiness and application scrapes'
 	@echo 'make platform-check Run deployment checks'
+	@echo 'make dev-network    Add NetworkPolicy enforcement to the kind profile'
+	@echo 'make tester-check   Verify Tester Agent on every node and list practice scenarios'
+	@echo 'make isolation-check Verify admission, RBAC and network enforcement'
+	@echo '                    Add SECURITY_PROFILE=--dev for development checks'
 
 host-tools:
 	bash deploy/k3s/host-tools.sh
@@ -75,3 +81,40 @@ platform-status:
 
 topology:
 	@$(PYTHON) deploy/k3s/manage.py topology
+
+.PHONY: tester-install tester-check isolation-check
+# Use SECURITY_PROFILE=--dev for the dedicated kind kubeconfig.
+tester-install:
+	$(PYTHON) deploy/k3s/security.py install $(SECURITY_PROFILE)
+
+tester-check:
+	$(PYTHON) deploy/k3s/security.py agent-check $(SECURITY_PROFILE)
+
+isolation-check:
+	$(PYTHON) deploy/k3s/security.py isolation-check $(SECURITY_PROFILE)
+
+.PHONY: dev-network
+dev-network:
+	$(PYTHON) deploy/k3s/dev.py network
+
+.PHONY: observability-render observability-install observability-check observability-forward
+# Use OBSERVABILITY_PROFILE=--dev for the dedicated kind kubeconfig.
+observability-render:
+	@$(PYTHON) deploy/k3s/observability.py render
+
+observability-install:
+	$(PYTHON) deploy/k3s/observability.py install $(OBSERVABILITY_PROFILE)
+
+observability-check:
+	$(PYTHON) deploy/k3s/observability.py check $(OBSERVABILITY_PROFILE)
+
+observability-forward:
+	$(PYTHON) deploy/k3s/observability.py forward $(OBSERVABILITY_PROFILE)
+
+.PHONY: observability-validate
+observability-validate:
+	$(PYTHON) deploy/k3s/observability.py validate
+
+.PHONY: telemetry-smoke
+telemetry-smoke:
+	$(PYTHON) deploy/k3s/telemetry_smoke.py $(OBSERVABILITY_PROFILE)

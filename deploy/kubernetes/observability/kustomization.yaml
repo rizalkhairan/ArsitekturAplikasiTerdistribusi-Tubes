@@ -1,0 +1,29 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: sistem-informasi-kebencanaan-bnpb
+resources:
+- workloads.yaml
+- services.yaml
+- identities.yaml
+- network-policies.yaml
+configMapGenerator:
+- name: prometheus-config
+  files:
+  - config.yaml=config/prometheus.yaml
+- name: otel-collector-config
+  files:
+  - config.yaml=config/otel-collector.yaml
+- name: tempo-config
+  files:
+  - config.yaml=config/tempo.yaml
+- name: loki-config
+  files:
+  - config.yaml=config/loki.yaml
+- name: alloy-config
+  files:
+  - config.alloy=config/alloy.alloy
+- name: grafana-config
+  files:
+  - datasources.yaml=config/datasources.yaml
+  - dashboards.yaml=config/dashboards.yaml
+  - services.json=config/services.json

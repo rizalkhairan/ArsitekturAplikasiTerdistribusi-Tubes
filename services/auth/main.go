@@ -1,17 +1,28 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/rizalkhairan/distributed-system/auth/internal/database"
 	"github.com/rizalkhairan/distributed-system/auth/internal/handlers"
-	"github.com/rizalkhairan/distributed-system/auth/internal/middleware"
+	"github.com/rizalkhairan/distributed-system/shared/telemetry"
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	t, err := telemetry.StartService(ctx, "auth")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer t.Flush()
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8000"
@@ -61,9 +72,19 @@ func main() {
 	mux.HandleFunc("POST /auth/login", handler.HandleLogin)
 	mux.HandleFunc("POST /auth/refresh", handler.HandleRefresh)
 
-	// Middleware chain: correlation → logging → routes
-	wrapped := middleware.CorrelationID(middleware.Logging(mux))
-
-	log.Printf("Auth service listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, wrapped))
+	server := &http.Server{Addr: ":" + port, Handler: t.Mux(mux), ReadHeaderTimeout: 5 * time.Second}
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdown)
+	}()
+	t.Logger.Info("auth_started")
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		t.Logger.Error("http_server_failed", "error", err)
+		stop()
+	}
+	<-shutdownDone
 }

@@ -1,4 +1,3 @@
-# Kubernetes baseline for the current M1 application; see deploy/README.md.
 apiVersion: v1
 kind: Service
 metadata:
@@ -15,6 +14,9 @@ spec:
   - name: health
     port: 8080
     targetPort: health
+  - name: metrics
+    port: 9090
+    targetPort: metrics
 ---
 apiVersion: v1
 kind: Service
@@ -29,6 +31,9 @@ spec:
   - name: http
     port: 8000
     targetPort: http
+  - name: metrics
+    port: 9090
+    targetPort: metrics
 ---
 apiVersion: v1
 kind: Service
@@ -129,3 +134,17 @@ spec:
   - name: health
     port: 8080
     targetPort: health
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: client-api-metrics
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  selector:
+    app.kubernetes.io/name: client-api
+    app.kubernetes.io/part-of: bnpb
+  ports:
+  - name: metrics
+    port: 9090
+    targetPort: metrics
