@@ -681,7 +681,50 @@ To inject poison Kafka records for the malformed-message demonstration, publish 
 
 ---
 
-## 10. Milestone 2 — Problem 3: ingest pipeline tests
+## 10. Milestone 2 - Problem 2: Aggregator resilience
+
+P2 runs on the M2 canonical contract in `contracts/m2/README.md` and shares the
+ingest pipeline with P3/P4.
+
+Components:
+
+- `services/coordinator` — durable per-source leases, monotonic epochs, checkpoint CAS, critical-alert outbox.
+- `services/canonical-store` — working canonical store until A delivers PostgreSQL/Citus. It implements versioned upsert/retract, authority-epoch fencing, tombstones, audit checksum/location and cursor queries.
+- `services/bnpb` — leader-elected BMKG/PVMBG/Sensor pollers, readiness, graceful drain, audit proxy, and active-passive ownership per source.
+- `services/client-api` — stateless read entry point used by the load tests.
+
+### Run locally
+
+```bash
+cp .env.example .env
+make dev-up
+# coordinator :8099  canonical-store :8095  ingest :8094  sensor :8087
+```
+
+### Run on Kubernetes
+
+```bash
+./scripts/build-images.sh
+make k8s-up
+kubectl -n sistem-informasi-kebencanaan-bnpb get pods -o wide
+```
+
+The namespace, `role` labels, memory classes, local-PV stores, PDB, topology
+spread and single Aggregator Service are in `deploy/`.
+
+### P2 tests
+
+```bash
+./loadtest/scaling.sh              # 10k VUs / 120s, scale 3 -> 5 -> 2
+./loadtest/throughput.sh           # 1 vs 3 instances, target >= 2.0x
+./loadtest/rolling-update.sh       # zero unexpected failures
+./loadtest/duplicate-detector.sh   # mock caller logs + canonical rows
+./scripts/integration-pause-leader.sh
+```
+
+---
+
+## 11. Milestone 2 - Problem 3: ingest pipeline tests
 
 Bagian ini menambahkan validasi M2 terpisah dari panduan M1 di atas. Jalankan dari
 root repository setelah `docker compose up --build -d` dan seluruh health check
@@ -1216,7 +1259,9 @@ replication factor 1, sehingga hasil ini tidak membuktikan ketahanan ketika node
 hilang; uji tersebut memerlukan cluster Kafka multi-node. Konsumen yang berhenti atau
 restart diuji terpisah dari kegagalan node broker.
 
-## Milestone 2 — P4 satellite stream processor
+---
+
+## 12. Milestone 2 - Problem 4: satellite stream processor
 
 The P4 service is `services/satellite-processor`. It keeps one SSE connection to the
 satellite feed, persists each input and offset before acknowledging it locally, and
@@ -1287,50 +1332,35 @@ at the deployed A/B canonical API to demonstrate actual canonical persistence.
 
 ---
 
-## 11. Milestone 2 — Problem 2 and Problem 5
+## 13. Milestone 2 - Problem 5: Sensor Pantai resilience
 
-P2 and P5 run on the same canonical contract as `contracts/m2/README.md`:
+P5 runs the supplied Sensor Pantai image and the same lease/epoch path as P2.
 
-- `services/coordinator` — durable per-source leases, monotonic epochs, checkpoint CAS, critical-alert outbox.
-- `services/canonical-store` — working canonical store until A delivers PostgreSQL/Citus. It implements versioned upsert/retract, authority-epoch fencing, tombstones, audit checksum/location and cursor queries.
-- `services/ingest-pipeline` — C-owned durable DLQ/replay and field-report intake.
+Components:
+
+- `services/bnpb` sensor path — short timeouts, retries with full jitter and a retry budget, circuit breaker, progress-based health, cursor fallback, composite dedupe, last-known-good cache, critical outbox.
+- `services/ingest-pipeline` — C-owned durable DLQ/replay used for invalid sensor observations.
 - `services/field-notifier` — Tim Lapangan webhook receiver with dedupe and end-to-end latency metrics.
-- `services/bnpb` — leader-elected BMKG/PVMBG/Sensor pollers, readiness, graceful drain, audit proxy, sensor validation/breaker/priority outbox.
-- `services/client-api` — priority-aware admission control (reserved capacity for Tim Lapangan).
+- `services/client-api` — priority-aware admission control with reserved capacity for Tim Lapangan.
+- `deploy/sensor-pantai/` — supplied manifest, mandatory resources block, and exam overlay.
 
 ### Run locally
 
+`make dev-up` already starts the real `sustuna/sensor-pantai` image with the
+practice profile. The sensor token comes from `PANTAI_AUTH_TOKEN`.
+
+### Exam overlay
+
 ```bash
-cp .env.example .env
-make dev-up
-# coordinator :8099  canonical-store :8095  field-notifier :8097  ingest :8094  sensor :8087
+kubectl -n sistem-informasi-kebencanaan-bnpb apply -f pantai-key.secret.yaml
+kubectl kustomize deploy/sensor-pantai/overlays/exam | kubectl apply -f -
 ```
 
-### Run on Kubernetes
+### P5 tests
 
 ```bash
-./scripts/build-images.sh
-make k8s-up
-kubectl -n sistem-informasi-kebencanaan-bnpb get pods -o wide
-```
-
-The namespace, `role` labels, memory classes, local-PV stores and single
-Aggregator Service are in `deploy/`. The sensor keeps its supplied image,
-`Recreate` strategy, single replica and `emptyDir`; only the mandatory resources
-block and the exam overlay were added.
-
-### P2/P5 tests
-
-```bash
-./loadtest/scaling.sh              # 10k VUs / 120s, scale 3 -> 5 -> 2
-./loadtest/throughput.sh           # 1 vs 3 instances, target >= 2.0x
-./loadtest/rolling-update.sh       # zero unexpected failures
-./loadtest/duplicate-detector.sh   # mock caller logs + canonical rows
 k6 run -e FIELD_VUS=4000 -e MEDIA_VUS=4000 loadtest/k6/priority.js
 ./scripts/gameday.sh
+./scripts/sensor-discovery.sh practice 42
+curl -s http://aggregator:8085/sensor/status | jq
 ```
-
-Design and evidence: `docs/report/p2.md`, `docs/report/p5.md`,
-`docs/sensor-quirks.md`. There is no separate storage/DLQ/notifier stub process;
-the runnable canonical store, ingest pipeline and field notifier are the services
-listed above.
