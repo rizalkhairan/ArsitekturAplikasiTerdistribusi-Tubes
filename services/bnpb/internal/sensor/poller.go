@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math/rand"
 	"sort"
 	"time"
 
@@ -217,9 +216,7 @@ func (p *Poller) pollStation(ctx context.Context, lease coordclient.Lease, stati
 		page, err := p.client.Observations(ctx, station.StationID, cursor, p.cfg.PageLimit)
 		if err != nil {
 			if errors.Is(err, ErrCursorInvalid) && !retried {
-				// Sensor restarted and its /data (emptyDir) lost the cursor. Re-read
-				// from the beginning, but only keep observations newer than the last
-				// committed observed_at minus an overlap window.
+				// Sensor state reset: re-read from the beginning and filter by the last committed time.
 				p.logger.Warn(ctx, "sensor_cursor_invalid", "station_id", station.StationID, "error", err.Error())
 				cursor = ""
 				fromStart = true
@@ -374,12 +371,4 @@ func ToHazardEvent(obs Observation, station Station, severity string) database.H
 			"quality": obs.Quality, "critical": obs.Critical,
 		},
 	}
-}
-
-// jitter returns a small positive jitter so three replicas do not synchronize.
-func jitter(d time.Duration) time.Duration {
-	if d <= 0 {
-		return 0
-	}
-	return time.Duration(rand.Int63n(int64(d/10) + 1))
 }

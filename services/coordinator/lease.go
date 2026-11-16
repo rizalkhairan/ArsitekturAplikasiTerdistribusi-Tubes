@@ -14,8 +14,7 @@ var (
 	ErrLeaseExpired = errors.New("lease expired")
 )
 
-// Clock separates the monotonic reading (expiry) from wall time (display).
-// Production uses wallClock; tests use a fake with independent mono/wall control.
+// Clock separates monotonic lease expiry from wall-clock display.
 type Clock interface {
 	Mono() time.Time
 	Wall() time.Time
@@ -85,7 +84,7 @@ func NewManager(clock Clock, persist func(persisted) error) *Manager {
 }
 
 func (m *Manager) snapshotLocked() persisted {
-	// Do not copy active lease deadlines: on restart every lease is expired.
+	// Active lease deadlines are not copied; a restart invalidates every lease.
 	epochs := make(map[string]int64, len(m.epochs))
 	for k, v := range m.epochs {
 		epochs[k] = v
@@ -114,8 +113,7 @@ func (m *Manager) saveLocked() error {
 	return m.persist(m.snapshotLocked())
 }
 
-// Restore loads durable epochs, checkpoints, and outbox. Active leases are never
-// restored: a restart invalidates them, so a holder must re-acquire (new epoch).
+// Restore loads durable state; active leases are never restored.
 func (m *Manager) Restore(state persisted) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -226,7 +224,7 @@ func (m *Manager) Lease(source string) (leaseState, bool) {
 	return *current, active
 }
 
-// CommitCheckpoint is the CAS that a woken/stale leader cannot pass.
+// CommitCheckpoint rejects stale or expired holders.
 func (m *Manager) CommitCheckpoint(source string, epoch int64, cursor string) (Checkpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

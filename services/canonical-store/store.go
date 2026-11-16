@@ -1,10 +1,4 @@
-// Canonical store service.
-//
-// This is the working canonical store for M2 until A delivers PostgreSQL/Citus.
-// It implements the contract in contracts/m2/README.md: versioned upsert/retract,
-// authoritative epoch fencing, tombstones, audit checksum/location and cursor
-// queries. It is deliberately a Go service (not the Python contract stub) and
-// persists to a node-local file.
+// Canonical store: versioned upserts/retracts, epoch fencing, tombstones, and audit queries.
 package main
 
 import (
@@ -121,13 +115,12 @@ func (s *Store) recordRequest(l RequestLog) {
 	}
 }
 
-// Mutate applies the contract's version/operation/fencing rules.
+// Mutate applies version, operation, and fencing rules.
 func (s *Store) Mutate(source, ref string, version int64, operation, partition string, epoch int64, event *HazardEvent) (storedEvent, bool, bool, error) {
 	return s.mutate(source, ref, version, operation, partition, epoch, event, true)
 }
 
-// MutateAdmin is used by the authenticated DLQ replay adapter. It applies the
-// same version/operation rules but does not claim poller authority.
+// MutateAdmin applies the same version rules for authenticated replay without poller authority.
 func (s *Store) MutateAdmin(source, ref string, version int64, operation string, event *HazardEvent) (storedEvent, bool, bool, error) {
 	return s.mutate(source, ref, version, operation, source, 0, event, false)
 }

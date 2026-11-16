@@ -1,7 +1,4 @@
-// Package leaderpoll contains the M2 leader-elected pollers for BMKG and PVMBG.
-// The M1 SQLite cursor is replaced by the coordinator checkpoint; the canonical
-// write goes to the storage contract. The local SQLite mirror is optional and
-// exists only to keep the M1 Compose demo (Kafka outbox) alive.
+// Leader-elected BMKG/PVMBG pollers using coordinator checkpoints and canonical writes.
 package leaderpoll
 
 import (
@@ -208,9 +205,8 @@ func (p *Poller) persist(ctx context.Context, lease coordclient.Lease, hazards [
 		}
 	}
 	if p.cfg.MirrorLocal && p.pools != nil {
+		// Mirror to SQLite only for the local Compose/Kafka demo path.
 		cursors := database.Cursors{}
-		// The mirror only needs source cursors; reusing the caller's is handled by
-		// the caller's commit. SaveHazards with nil cursors keeps the mirror simple.
 		if _, err := database.SaveHazards(ctx, p.pools.Write, hazards, cursors, p.cfg.KafkaTopic); err != nil {
 			return fmt.Errorf("local mirror: %w", err)
 		}

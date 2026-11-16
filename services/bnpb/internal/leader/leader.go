@@ -36,8 +36,7 @@ type Runner struct {
 	Logger        *obs.Logger
 }
 
-// Run waits for leadership, then runs work until the lease is lost or ctx ends.
-// work must return promptly when its context is cancelled.
+// Run waits for leadership and runs work until the lease is lost or ctx ends.
 func (r *Runner) Run(ctx context.Context, work func(context.Context, coordclient.Lease) error) {
 	for ctx.Err() == nil {
 		lease, err := r.Coord.Acquire(ctx, r.Source, r.Holder, r.TTL)
@@ -99,8 +98,7 @@ func (r *Runner) renewLoop(ctx context.Context, cancel context.CancelFunc, lease
 			renewed, err := r.Coord.Renew(renewCtx, r.Source, r.Holder, lease.Epoch, r.TTL)
 			stop()
 			if err != nil {
-				// Self-fence: stop doing work immediately. The resource will also
-				// reject us if we were suspended and the store moved on.
+				// Self-fence immediately; the resource also rejects stale epochs.
 				if r.Metrics != nil {
 					r.Metrics.Transitions.WithLabelValues(r.Source, "self_fenced").Inc()
 				}
@@ -113,8 +111,7 @@ func (r *Runner) renewLoop(ctx context.Context, cancel context.CancelFunc, lease
 			if r.Metrics != nil {
 				r.Metrics.Epoch.WithLabelValues(r.Source).Set(float64(renewed.Epoch))
 			}
-			// The store reports remaining TTL using its own mono clock. If we are
-			// inside the safety margin, stop before a suspend could make us stale.
+			// Stop inside the safety margin so a suspend cannot leave us stale.
 			if renewed.ExpiresInMs > 0 && time.Duration(renewed.ExpiresInMs)*time.Millisecond < r.SafetyMargin {
 				if r.Metrics != nil {
 					r.Metrics.Transitions.WithLabelValues(r.Source, "safety_margin").Inc()

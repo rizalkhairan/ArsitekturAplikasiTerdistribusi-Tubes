@@ -1,4 +1,4 @@
-// Package storeclient talks to the canonical store service using the M2 contract.
+// Package storeclient talks to the canonical store service.
 package storeclient
 
 import (

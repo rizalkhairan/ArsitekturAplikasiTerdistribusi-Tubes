@@ -189,8 +189,7 @@ func (c *Client) get(ctx context.Context, operation, path string, out any) error
 			return nil
 		}
 		if errors.Is(err, ErrCursorInvalid) {
-			// A cursor reset after the sensor lost its emptyDir is an expected
-			// state-reset event, not evidence that the sensor is unhealthy.
+			// A cursor reset is a state reset, not a sensor-health failure.
 			c.breaker.Success()
 			if c.metrics != nil {
 				c.metrics.Requests.WithLabelValues(Source, operation, "cursor_invalid").Inc()

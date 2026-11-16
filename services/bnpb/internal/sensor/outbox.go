@@ -14,9 +14,7 @@ import (
 	"github.com/rizalkhairan/distributed-system/observability"
 )
 
-// Deliverer drains the critical-notification outbox. It is not leader-gated:
-// any Aggregator replica may deliver, and claims make the work exclusive enough
-// to avoid a delivery storm. Delivery is at-least-once; the receiver dedupes.
+// Deliverer drains the critical-notification outbox; delivery is at-least-once.
 type Deliverer struct {
 	coord      *coordclient.Client
 	notifier   string
@@ -110,8 +108,7 @@ func (d *Deliverer) deliver(ctx context.Context, entry coordclient.OutboxEntry) 
 	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
 		return fmt.Errorf("notifier HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	case resp.StatusCode >= 400 && resp.StatusCode < 500:
-		// Permanent rejection: retrying cannot fix a malformed payload. Ack it so a
-		// poison message does not block the outbox; the metric keeps it visible.
+		// Permanent rejection: retrying cannot fix a malformed payload.
 		if d.metrics != nil {
 			d.metrics.OutboxDelivered.WithLabelValues(Source, "permanent_reject").Inc()
 		}

@@ -114,9 +114,7 @@ func (c *Client) Checkpoint(ctx context.Context, source string) (Checkpoint, err
 	return cp, err
 }
 
-// Validate refreshes the holder's status with the store immediately before a
-// write. A process that was suspended past its TTL must call this and see 409
-// before it is allowed to persist anything.
+// Validate confirms the holder still owns the epoch before a write.
 func (c *Client) Validate(ctx context.Context, source, holder string, epoch int64) error {
 	var lease Lease
 	if err := c.do(ctx, http.MethodGet, "/v1/leases/"+url.PathEscape(source), nil, &lease); err != nil {

@@ -41,7 +41,7 @@ func main() {
 	mux.HandleFunc("GET /hazards", authMiddleware(handleListHazards(bnpbClient, cfg.MaxLimit)))
 	mux.HandleFunc("GET /hazards/{id}", authMiddleware(handleGetHazard(bnpbClient)))
 
-	// Middleware chain: correlation → logging → priority admission → routes
+	// Correlation -> logging -> priority admission -> routes
 	rateLimiter := middleware.NewPriorityLimiter(cfg.MaxConcurrent, cfg.ReservedConcurrent, registry)
 	handler := middleware.CorrelationID(
 		middleware.Logging(

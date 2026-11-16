@@ -59,8 +59,7 @@ func (s *Server) handleGetHazard(w http.ResponseWriter, r *http.Request) {
 	var event database.HazardEvent
 	var err error
 	if s.store != nil {
-		// The contract addresses events by source_ref_id; the client API addresses
-		// them by hazard_id. The storage stub exposes a by-hazard lookup.
+		// The client API uses hazard_id; the canonical contract uses source_ref_id.
 		event, err = s.store.GetByHazardID(r.Context(), id)
 	} else {
 		event, err = database.GetHazard(r.Context(), s.db, id)

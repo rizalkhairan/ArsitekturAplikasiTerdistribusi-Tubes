@@ -91,9 +91,7 @@ type reprocessRequest struct {
 	RawBase64        string `json:"raw_base64"`
 }
 
-// handleReprocess is the authenticated canonical-write adapter used by C's DLQ
-// replay tool. In M2 mode it writes through the canonical store; otherwise it
-// preserves the M1 SQLite behavior.
+// handleReprocess is the authenticated canonical-write adapter for DLQ replay.
 func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
 	body, err := io.ReadAll(r.Body)
@@ -140,7 +138,7 @@ func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"message_id": req.MessageID, "source": "PVMBG", "source_ref_id": event.SourceRefID, "status": "processed", "idempotent": true})
 }
 
-// ConfigureM2 attaches the shared storage/DLQ path and the audit proxy.
+// ConfigureM2 attaches shared storage, DLQ, and the audit proxy.
 func (s *Server) ConfigureM2(store *storeclient.Client, dlq *dlqclient.Client, auditToken string,
 	freshness FreshnessFunc, sensorStatus func(context.Context) any) {
 	s.store = store
@@ -166,15 +164,12 @@ func (s *Server) SetReadCacheTTL(ttl time.Duration) {
 	}
 }
 
-// SetSensorFallback installs the last-known-good sensor snapshot used when the
-// shared storage is temporarily unreachable.
+// SetSensorFallback installs the last-known-good snapshot for storage outages.
 func (s *Server) SetSensorFallback(fn func() ([]database.HazardEvent, time.Time, bool)) {
 	s.sensorFallback = fn
 }
 
-// listEvents is a short read-through cache. The storage contract is a shared
-// service; serving every 10k-VU read from it would make it the scaling
-// bottleneck. A 500ms cache bounds staleness far below the 10s M1 criterion.
+// listEvents caches canonical reads briefly to avoid a shared-store bottleneck.
 func (s *Server) listEvents(ctx context.Context, source, severity, since string, limit int) ([]database.HazardEvent, error) {
 	key := source + "\x00" + severity + "\x00" + since + "\x00" + strconv.Itoa(limit)
 	now := time.Now()
@@ -263,9 +258,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-// handleReady is the readiness used by Kubernetes. A pod that cannot reach the
-// shared storage cannot serve correct reads, so it is removed from the Service.
-// Losing the coordinator stops polling but does not break reads.
+// handleReady removes the pod from the Service when canonical storage is unreachable.
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	if s.ready != nil && !s.ready() {
 		writeContractError(w, http.StatusServiceUnavailable, "draining", "instance is draining")
@@ -290,9 +283,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	s.metrics.ServeHTTP(w, r)
 }
 
-// writeFreshnessHeaders attaches an explicit data-freshness marker to every hazard
-// response. It prefers shared (coordinator/storage) freshness in M2 mode so a
-// non-leader replica does not report its own empty poller state.
+// writeFreshnessHeaders adds freshness headers from shared coordinator/storage state.
 func (s *Server) writeFreshnessHeaders(w http.ResponseWriter, r *http.Request, sources ...string) {
 	if len(sources) == 0 {
 		sources = []string{"BMKG", "PVMBG", "SENSOR_PANTAI"}

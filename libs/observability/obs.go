@@ -1,16 +1,4 @@
-// Package obs is the thin observability shim owned by Person B.
-//
-// It deliberately depends only on the Go standard library so it can be swapped for
-// Person A's shared library later. The public surface is intentionally small:
-//
-//   - Logger: structured JSON logs with correlation ID and W3C trace IDs.
-//   - Registry: Prometheus text exposition (counters, gauges, histograms).
-//   - Trace helpers: W3C traceparent parse/inject, span duration logs, optional
-//     OTLP/HTTP JSON export.
-//   - HTTP middleware: RED metrics, in-flight gauge, correlation and trace headers.
-//
-// Replacement contract: keep Logger, Registry, StartSpan, TraceFromContext and
-// HTTPMiddleware names/semantics, or adapt at the call sites.
+// Package obs provides structured logs, Prometheus metrics, W3C trace propagation, and HTTP instrumentation.
 package obs
 
 import (
@@ -678,8 +666,7 @@ func InjectHeaders(ctx context.Context, h http.Header) {
 }
 
 func routeLabel(r *http.Request) string {
-	// Go 1.22+ populates PathValue on the routed request, but this middleware
-	// wraps the mux, so normalize known high-cardinality paths here.
+	// Normalize high-cardinality paths for metric labels.
 	path := r.URL.Path
 	switch {
 	case strings.HasPrefix(path, "/hazards/"):
@@ -704,7 +691,6 @@ func isHex(s string) bool {
 	return true
 }
 
-// The standard math package is imported through these tiny wrappers so the file
-// above stays readable and the atomic float pattern is in one place.
+
 func mathFloat64bits(f float64) uint64     { return math.Float64bits(f) }
 func mathFloat64frombits(b uint64) float64 { return math.Float64frombits(b) }

@@ -93,7 +93,7 @@ func main() {
 		_ = json.NewEncoder(w).Encode(snapshotRequests())
 	})
 
-	// Middleware chain: correlation → logging → routes
+	// Correlation -> logging -> routes
 	handler := correlationMiddleware(loggingMiddleware(mux))
 
 	log.Printf("PVMBG listening on :%s", port)

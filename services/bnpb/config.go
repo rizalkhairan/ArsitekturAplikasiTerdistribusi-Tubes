@@ -31,7 +31,6 @@ type config struct {
 	PollInterval             time.Duration
 	StalenessThreshold       time.Duration
 
-	// M2 coordination/canonical/sensor.
 	CoordinatorURL   string
 	CoordinatorToken string
 	StorageURL       string

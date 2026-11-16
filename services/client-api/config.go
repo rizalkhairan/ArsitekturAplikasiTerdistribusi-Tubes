@@ -24,7 +24,6 @@ type config struct {
 }
 
 func loadConfig() config {
-	// Configure token TTL (default 60s, configurable for demo)
 	if v := os.Getenv("TOKEN_TTL_SECONDS"); v != "" {
 		if secs, err := time.ParseDuration(v + "s"); err == nil && secs > 0 {
 			auth.SetMaxTokenAge(secs)

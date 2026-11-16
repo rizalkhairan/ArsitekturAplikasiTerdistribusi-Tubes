@@ -108,8 +108,7 @@ func serve(store *Store, addr string) {
 		})
 	}))
 
-	// Legacy/internal read helpers used by the Aggregator cache and the
-	// exactly-once duplicate detector.
+	// Legacy helpers for the Aggregator read cache and duplicate detector.
 	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 		stored := store.LegacyList(r.URL.Query().Get("source"), r.URL.Query().Get("since"), limit)

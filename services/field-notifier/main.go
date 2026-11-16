@@ -1,9 +1,4 @@
-// Field-team notifier stub.
-//
-// Receives critical alerts from the Aggregator priority lane, dedupes by
-// dedupe_key (effective-once), records receipt time, and exposes the end-to-end
-// latency so SLO budget can be computed. In production this is the Tim Lapangan
-// notification receiver.
+// Field-team notifier: dedupes critical alerts and records end-to-end latency.
 package main
 
 import (

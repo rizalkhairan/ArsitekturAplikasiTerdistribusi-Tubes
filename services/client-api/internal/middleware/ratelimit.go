@@ -11,8 +11,7 @@ import (
 	"github.com/rizalkhairan/distributed-system/observability"
 )
 
-// PriorityLimiter reserves capacity for Tim Lapangan (field) so Media is shed
-// first under overload. Only /hazards is admission controlled.
+// PriorityLimiter reserves capacity for Tim Lapangan (field) under overload.
 type PriorityLimiter struct {
 	total    int
 	reserved int

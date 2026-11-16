@@ -1,8 +1,4 @@
-// Package sensor implements Person B's black-box Sensor Pantai client.
-//
-// Nothing here reads PANTAI_SEED, PANTAI_PROFILE, PANTAI_SPEED, or the shape of
-// observation ids. Resilience depends only on the published contract, observed
-// progress, and a composite identity that survives sensor state resets.
+// Sensor Pantai client: contract validation, progress health, composite identity, and last-known-good cache.
 package sensor
 
 import (
@@ -41,9 +37,7 @@ type Page struct {
 	NextCursor  string            `json:"next_cursor"`
 }
 
-// CompositeKey is deliberately not the raw observation_id: the sensor's /data is
-// an emptyDir and ids may repeat after a restart. station + observed_at + id is
-// stable for the same physical observation and safe to dedupe on.
+// CompositeKey survives sensor state resets; raw observation_id may repeat after /data is lost.
 func CompositeKey(obs Observation) string {
 	return obs.StationID + "@" + obs.ObservedAt.UTC().Format(time.RFC3339Nano) + "#" + obs.ObservationID
 }
@@ -89,9 +83,7 @@ type Violation struct {
 	Detail string `json:"detail"`
 }
 
-// Validate is generic: required fields/types, finite numbers, configurable
-// plausible ranges, RFC3339 UTC and not absurdly in the future, known station,
-// known quality enum, boolean critical.
+// Validate checks required fields, ranges, timestamps, station and quality.
 func Validate(raw json.RawMessage, cfg ValidationConfig, stations map[string]Station, now time.Time) (Observation, []Violation) {
 	var fields map[string]any
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
@@ -195,9 +187,7 @@ func numberField(fields map[string]any, key string) (float64, bool) {
 	}
 }
 
-// Severity maps the sensor's critical flag and configurable physical thresholds
-// to the M1 canonical severity enum. This is an explicit assumption documented
-// in docs/B-plan.md because the base contract does not define the mapping.
+// Severity maps critical/thresholds to the canonical severity enum.
 type SeverityConfig struct {
 	SiagaWave, SiagaSea     float64
 	WaspadaWave, WaspadaSea float64
@@ -275,7 +265,7 @@ func (c *Cache) Snapshot() ([]Observation, time.Time) {
 	return out, c.asOf
 }
 
-// Progress is progress-based health. /healthz is ignored on purpose.
+// Progress tracks progress-based health; /healthz is ignored.
 type Progress struct {
 	mu            sync.RWMutex
 	seen          map[string]struct{}
