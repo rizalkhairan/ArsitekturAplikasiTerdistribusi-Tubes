@@ -10,16 +10,17 @@ import (
 )
 
 type config struct {
-	Port              string
-	BNPBURL           string
-	UpstreamTimeout   time.Duration
-	MaxConcurrent     int
-	BNPBInternalKey   string
-	MaxLimit          int
-	AuthServiceURL    string
-	JWTSecret         string
-	IngestPipelineURL string
-	FieldReportToken  string
+	Port               string
+	BNPBURL            string
+	UpstreamTimeout    time.Duration
+	MaxConcurrent      int
+	ReservedConcurrent int
+	BNPBInternalKey    string
+	MaxLimit           int
+	AuthServiceURL     string
+	JWTSecret          string
+	IngestPipelineURL  string
+	FieldReportToken   string
 }
 
 func loadConfig() config {
@@ -31,16 +32,17 @@ func loadConfig() config {
 	}
 
 	return config{
-		Port:              env("PORT", "8080"),
-		BNPBURL:           env("BNPB_API_URL", "http://bnpb:8085"),
-		UpstreamTimeout:   envDuration("UPSTREAM_TIMEOUT", 5*time.Second),
-		MaxConcurrent:     envInt("MAX_CONCURRENT_REQUESTS", 100),
-		BNPBInternalKey:   os.Getenv("BNPB_INTERNAL_KEY"),
-		MaxLimit:          envInt("MAX_LIMIT", 100),
-		AuthServiceURL:    env("AUTH_SERVICE_URL", "http://auth:8000"),
-		JWTSecret:         os.Getenv("JWT_SECRET"),
-		IngestPipelineURL: env("INGEST_PIPELINE_URL", "http://ingest-pipeline:8094"),
-		FieldReportToken:  os.Getenv("FIELD_REPORT_TOKEN"),
+		Port:               env("PORT", "8080"),
+		BNPBURL:            env("BNPB_API_URL", "http://bnpb:8085"),
+		UpstreamTimeout:    envDuration("UPSTREAM_TIMEOUT", 5*time.Second),
+		MaxConcurrent:      envInt("MAX_CONCURRENT_REQUESTS", 100),
+		ReservedConcurrent: envInt("RESERVED_FIELD_CAPACITY", 40),
+		BNPBInternalKey:    os.Getenv("BNPB_INTERNAL_KEY"),
+		MaxLimit:           envInt("MAX_LIMIT", 100),
+		AuthServiceURL:     env("AUTH_SERVICE_URL", "http://auth:8000"),
+		JWTSecret:          os.Getenv("JWT_SECRET"),
+		IngestPipelineURL:  env("INGEST_PIPELINE_URL", "http://ingest-pipeline:8094"),
+		FieldReportToken:   os.Getenv("FIELD_REPORT_TOKEN"),
 	}
 }
 

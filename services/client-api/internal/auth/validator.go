@@ -26,6 +26,7 @@ type Claims struct {
 	ClientID   string
 	Scope      string
 	WriteScope string
+	Role       string
 }
 
 var jwtSecret []byte
@@ -80,10 +81,28 @@ func ValidateToken(authHeader string) (*Claims, error) {
 
 	name, _ := claims["name"].(string)
 	writeScope, _ := claims["write_scope"].(string)
+	role, _ := claims["role"].(string)
+	if role == "" {
+		role = roleForClient(name, scope)
+	}
 
 	return &Claims{
 		ClientID:   name,
 		Scope:      scope,
 		WriteScope: writeScope,
+		Role:       role,
 	}, nil
+}
+
+func roleForClient(name, scope string) string {
+	switch {
+	case name == "field-user" || name == "internal-user":
+		return "field"
+	case name == "media-user":
+		return "media"
+	case scope == "full":
+		return "field"
+	default:
+		return "media"
+	}
 }

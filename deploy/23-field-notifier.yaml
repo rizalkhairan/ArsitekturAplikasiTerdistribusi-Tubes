@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: field-notifier
+  labels: {app: field-notifier, role: consumer}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: field-notifier}
+  template:
+    metadata:
+      labels: {app: field-notifier, role: consumer}
+    spec:
+      containers:
+        - name: field-notifier
+          image: bnpb-gateway/field-notifier:m2
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: ADDR, value: ":8080"}
+            - name: NOTIFIER_TOKEN
+              valueFrom: {secretKeyRef: {name: bnpb-secrets, key: NOTIFIER_TOKEN}}
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe: {httpGet: {path: /health, port: 8080}, initialDelaySeconds: 2, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /health, port: 8080}, initialDelaySeconds: 5, periodSeconds: 10}
+          resources:
+            requests: {memory: 128Mi}
+            limits: {memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: field-notifier
+spec:
+  selector: {app: field-notifier}
+  ports:
+    - {name: http, port: 8080, targetPort: 8080}

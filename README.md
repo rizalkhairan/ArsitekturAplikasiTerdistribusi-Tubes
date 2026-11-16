@@ -1284,3 +1284,53 @@ reference output are not in this repository; the local test fixture is deliberat
 synthetic and must not be used as production reference data. The local canonical stub
 is in-memory and declares its durability simulated. A live acceptance run must point
 at the deployed A/B canonical API to demonstrate actual canonical persistence.
+
+---
+
+## 11. Milestone 2 — Problem 2 and Problem 5
+
+P2 and P5 run on the same canonical contract as `contracts/m2/README.md`:
+
+- `services/coordinator` — durable per-source leases, monotonic epochs, checkpoint CAS, critical-alert outbox.
+- `services/canonical-store` — working canonical store until A delivers PostgreSQL/Citus. It implements versioned upsert/retract, authority-epoch fencing, tombstones, audit checksum/location and cursor queries.
+- `services/ingest-pipeline` — C-owned durable DLQ/replay and field-report intake.
+- `services/field-notifier` — Tim Lapangan webhook receiver with dedupe and end-to-end latency metrics.
+- `services/bnpb` — leader-elected BMKG/PVMBG/Sensor pollers, readiness, graceful drain, audit proxy, sensor validation/breaker/priority outbox.
+- `services/client-api` — priority-aware admission control (reserved capacity for Tim Lapangan).
+
+### Run locally
+
+```bash
+cp .env.example .env
+make dev-up
+# coordinator :8099  canonical-store :8095  field-notifier :8097  ingest :8094  sensor :8087
+```
+
+### Run on Kubernetes
+
+```bash
+./scripts/build-images.sh
+make k8s-up
+kubectl -n sistem-informasi-kebencanaan-bnpb get pods -o wide
+```
+
+The namespace, `role` labels, memory classes, local-PV stores and single
+Aggregator Service are in `deploy/`. The sensor keeps its supplied image,
+`Recreate` strategy, single replica and `emptyDir`; only the mandatory resources
+block and the exam overlay were added.
+
+### P2/P5 tests
+
+```bash
+./loadtest/scaling.sh              # 10k VUs / 120s, scale 3 -> 5 -> 2
+./loadtest/throughput.sh           # 1 vs 3 instances, target >= 2.0x
+./loadtest/rolling-update.sh       # zero unexpected failures
+./loadtest/duplicate-detector.sh   # mock caller logs + canonical rows
+k6 run -e FIELD_VUS=4000 -e MEDIA_VUS=4000 loadtest/k6/priority.js
+./scripts/gameday.sh
+```
+
+Design and evidence: `docs/report/p2.md`, `docs/report/p5.md`,
+`docs/sensor-quirks.md`. There is no separate storage/DLQ/notifier stub process;
+the runnable canonical store, ingest pipeline and field notifier are the services
+listed above.

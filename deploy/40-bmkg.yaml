@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bmkg
+  labels: {app: bmkg, role: mock}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: bmkg}
+  template:
+    metadata:
+      labels: {app: bmkg, role: mock}
+    spec:
+      containers:
+        - name: bmkg
+          image: bnpb-gateway/bmkg:m2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: grpc, containerPort: 8081}
+            - {name: admin, containerPort: 8083}
+          env:
+            - {name: PORT, value: "8081"}
+            - {name: ADMIN_ADDR, value: ":8083"}
+            - {name: DB_PATH, value: /app/data/bmkg.db}
+            - name: BMKG_API_KEY
+              valueFrom: {secretKeyRef: {name: bnpb-secrets, key: BMKG_API_KEY}}
+          readinessProbe: {tcpSocket: {port: 8081}, initialDelaySeconds: 3, periodSeconds: 5}
+          livenessProbe: {tcpSocket: {port: 8081}, initialDelaySeconds: 5, periodSeconds: 10}
+          resources:
+            requests: {memory: 64Mi}
+            limits: {memory: 128Mi}
+          volumeMounts:
+            - {name: data, mountPath: /app/data}
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bmkg
+spec:
+  selector: {app: bmkg}
+  ports:
+    - {name: grpc, port: 8081, targetPort: 8081}
+    - {name: admin, port: 8083, targetPort: 8083}

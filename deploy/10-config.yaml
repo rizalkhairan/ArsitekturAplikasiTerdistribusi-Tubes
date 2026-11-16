@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bnpb-config
+data:
+  # Every dependency URL is here so components can be replaced by editing this map.
+  COORDINATOR_URL: http://coordinator:8080
+  STORAGE_URL: http://canonical-store:8080
+  DLQ_URL: http://ingest-pipeline:8094
+  INGEST_PIPELINE_URL: http://ingest-pipeline:8094
+  NOTIFIER_URL: http://field-notifier:8080
+  SENSOR_URL: http://sensor-pantai:8080
+  BMKG_GRPC_ADDR: bmkg:8081
+  PVMBG_BASE_URL: http://pvmbg:8082
+  BNPB_API_URL: http://aggregator:8085
+  AUTH_SERVICE_URL: http://auth:8000
+
+  POLL_INTERVAL: 3s
+  UPSTREAM_TIMEOUT: 5s
+  STALENESS_THRESHOLD: 10s
+  LEASE_TTL: 15s
+  LEASE_RENEW_INTERVAL: 5s
+  LEASE_SAFETY_MARGIN: 2s
+  SHUTDOWN_DRAIN: 5s
+
+  # P2/P5 do not require C's broker. The critical-alert outbox is B-owned.
+  KAFKA_ENABLED: "false"
+  MIRROR_LOCAL_DB: "false"
+
+  SENSOR_POLL_INTERVAL: 2s
+  SENSOR_TIMEOUT: 3s
+  SENSOR_STALE_AFTER: 45s
+  SENSOR_PAGE_LIMIT: "100"
+  SENSOR_MAX_PAGES: "20"
+  SENSOR_CURSOR_OVERLAP: 5m
+  SENSOR_STATIONS_REFRESH: 10m
+  SENSOR_QUALITY_ENUM: good,fair,poor,degraded,unknown
+  SENSOR_SEA_LEVEL_MIN: "-10"
+  SENSOR_SEA_LEVEL_MAX: "10"
+  SENSOR_WAVE_MIN: "0"
+  SENSOR_WAVE_MAX: "50"
+  SENSOR_MAX_FUTURE: 5m
+  SENSOR_SIAGA_WAVE_M: "4"
+  SENSOR_SIAGA_SEA_M: "1.5"
+  SENSOR_WASPADA_WAVE_M: "2"
+  SENSOR_WASPADA_SEA_M: "0.75"
+
+  MAX_CONCURRENT_REQUESTS: "200"
+  RESERVED_FIELD_CAPACITY: "80"
+  MAX_LIMIT: "100"
+  TOKEN_TTL_SECONDS: "60"
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""

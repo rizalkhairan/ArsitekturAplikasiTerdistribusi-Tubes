@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ingest-data
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingest-pipeline
+  labels: {app: ingest-pipeline, role: consumer}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: ingest-pipeline}
+  template:
+    metadata:
+      labels: {app: ingest-pipeline, role: consumer}
+    spec:
+      containers:
+        - name: ingest-pipeline
+          image: bnpb-gateway/ingest-pipeline:m2
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: PIPELINE_MODE, value: api}
+            - {name: HTTP_ADDR, value: ":8094"}
+            - {name: PIPELINE_DB_PATH, value: /app/data/ingest.db}
+            - {name: KAFKA_BROKERS, value: kafka:9092}
+            - {name: FIELD_REPORT_TOPIC, value: field-reports}
+            - {name: BNPB_REPROCESS_URL, value: "http://aggregator:8085"}
+            - name: AUDIT_TOKEN
+              valueFrom: {secretKeyRef: {name: bnpb-secrets, key: AUDIT_TOKEN}}
+            - name: OPS_TOKEN
+              valueFrom: {secretKeyRef: {name: bnpb-secrets, key: OPS_TOKEN}}
+            - name: FIELD_REPORT_TOKEN
+              valueFrom: {secretKeyRef: {name: bnpb-secrets, key: FIELD_REPORT_TOKEN}}
+            - name: PIPELINE_INTERNAL_TOKEN
+              valueFrom: {secretKeyRef: {name: bnpb-secrets, key: PIPELINE_INTERNAL_TOKEN}}
+            - name: BNPB_INTERNAL_KEY
+              valueFrom: {secretKeyRef: {name: bnpb-secrets, key: INTERNAL_API_KEY}}
+          ports:
+            - {name: http, containerPort: 8094}
+          readinessProbe: {httpGet: {path: /health, port: 8094}, initialDelaySeconds: 3, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /health, port: 8094}, initialDelaySeconds: 5, periodSeconds: 10}
+          resources:
+            requests: {memory: 128Mi}
+            limits: {memory: 256Mi}
+          volumeMounts:
+            - {name: data, mountPath: /app/data}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: ingest-data}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingest-pipeline
+spec:
+  selector: {app: ingest-pipeline}
+  ports:
+    - {name: http, port: 8094, targetPort: 8094}

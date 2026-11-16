@@ -1,13 +1,15 @@
 FROM golang:1.26-alpine AS builder
 
-# Build with services/ as the context to reuse BMKG's generated API contract.
-WORKDIR /src/bnpb
-COPY bmkg/go.mod bmkg/go.sum /src/bmkg/
-COPY bnpb/go.mod bnpb/go.sum ./
+# Root context: services/ and libs/ are both needed.
+WORKDIR /src/services/bnpb
+COPY services/bmkg/go.mod services/bmkg/go.sum /src/services/bmkg/
+COPY libs/observability/go.mod /src/libs/observability/
+COPY services/bnpb/go.mod services/bnpb/go.sum ./
 RUN go mod download
 
-COPY bmkg/proto /src/bmkg/proto
-COPY bnpb/ ./
+COPY libs/observability /src/libs/observability
+COPY services/bmkg/proto /src/services/bmkg/proto
+COPY services/bnpb/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/bnpb .
 
 FROM alpine:3.22
@@ -17,6 +19,6 @@ RUN apk add --no-cache ca-certificates \
 WORKDIR /app
 COPY --from=builder /out/bnpb ./bnpb
 ENV DB_PATH=/app/data/bnpb.db
-EXPOSE 8080
+EXPOSE 8080 8085
 USER bnpb
 CMD ["./bnpb"]
