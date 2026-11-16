@@ -1,6 +1,9 @@
 package communication
 
-import "time"
+import (
+	"os"
+	"time"
+)
 
 type Clients struct {
 	BMKG  *BMKGClient
@@ -21,4 +24,11 @@ func New(bmkgAddress, bmkgKey, pvmbgURL, pvmbgToken string, timeout time.Duratio
 func (c *Clients) Close() error {
 	c.PVMBG.http.CloseIdleConnections()
 	return c.BMKG.Close()
+}
+
+func instanceID() string {
+	if value := os.Getenv("INSTANCE_ID"); value != "" {
+		return value
+	}
+	return "bnpb-local"
 }

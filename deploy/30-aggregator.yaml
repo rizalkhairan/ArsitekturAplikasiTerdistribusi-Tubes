@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aggregator
+  labels: {app: aggregator, role: aggregator}
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels: {app: aggregator}
+  template:
+    metadata:
+      labels: {app: aggregator, role: aggregator}
+    spec:
+      terminationGracePeriodSeconds: 30
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels: {app: aggregator}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app: aggregator}
+      containers:
+        - name: aggregator
+          image: bnpb-gateway/aggregator:m2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8085}
+            - {name: health, containerPort: 8080}
+          envFrom:
+            - configMapRef: {name: bnpb-config}
+            - secretRef: {name: bnpb-secrets}
+          env:
+            - {name: DB_PATH, value: /app/data/bnpb.db}
+            - {name: HEALTH_ADDR, value: ":8080"}
+            - {name: BNPB_API_PORT, value: "8085"}
+            - name: INSTANCE_ID
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+          readinessProbe:
+            httpGet: {path: /readyz, port: 8085}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: {path: /health, port: 8080}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+          resources:
+            requests: {memory: 256Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: local, mountPath: /app/data}
+      volumes:
+        - name: local
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aggregator
+spec:
+  selector: {app: aggregator}
+  ports:
+    - {name: http, port: 8085, targetPort: 8085}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: aggregator
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: {app: aggregator}

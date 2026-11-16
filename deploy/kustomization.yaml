@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: sistem-informasi-kebencanaan-bnpb
+resources:
+  - 00-namespace.yaml
+  - 10-config.yaml
+  - 11-secrets.dev.yaml
+  - 20-coordinator.yaml
+  - 21-canonical-store.yaml
+  - 22-ingest-pipeline.yaml
+  - 23-field-notifier.yaml
+  - 30-aggregator.yaml
+  - 31-client-api.yaml
+  - 32-auth.yaml
+  - 40-bmkg.yaml
+  - 41-pvmbg.yaml
+  - sensor-pantai/base
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: bnpb-gateway
+    includeSelectors: false
+configMapGenerator:
+  - name: bnpb-grafana-dashboard
+    files:
+      - dashboards/bnpb-gateway.json
+    options:
+      labels:
+        grafana_dashboard: "1"

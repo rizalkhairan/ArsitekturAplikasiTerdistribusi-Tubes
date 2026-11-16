@@ -9,11 +9,43 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+type requestLogEntry struct {
+	TS             string `json:"ts"`
+	Method         string `json:"method"`
+	Path           string `json:"path"`
+	CallerInstance string `json:"caller_instance"`
+	CorrelationID  string `json:"correlation_id"`
+	Status         int    `json:"status"`
+}
+
+var (
+	requestMu  sync.Mutex
+	requestLog []requestLogEntry
+)
+
+func recordRequest(entry requestLogEntry) {
+	requestMu.Lock()
+	defer requestMu.Unlock()
+	requestLog = append(requestLog, entry)
+	if len(requestLog) > 5000 {
+		requestLog = requestLog[len(requestLog)-5000:]
+	}
+}
+
+func snapshotRequests() []requestLogEntry {
+	requestMu.Lock()
+	defer requestMu.Unlock()
+	out := make([]requestLogEntry, len(requestLog))
+	copy(out, requestLog)
+	return out
+}
 
 type VolcanicReport struct {
 	ReportID         string    `json:"report_id"`
@@ -56,8 +88,12 @@ func main() {
 	mux.HandleFunc("/volcanic-reports", volcanicReports)
 	mux.HandleFunc("/admin/schema-version", schemaVersionHandler)
 	mux.HandleFunc("/admin/outage", outageHandler)
+	mux.HandleFunc("/admin/requests", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(snapshotRequests())
+	})
 
-	// Middleware chain: correlation → logging → routes
+	// Correlation -> logging -> routes
 	handler := correlationMiddleware(loggingMiddleware(mux))
 
 	log.Printf("PVMBG listening on :%s", port)
@@ -178,18 +214,25 @@ func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		corrID, _ := r.Context().Value("correlation_id").(string)
+		caller := r.Header.Get("X-Caller-Instance")
+		if caller == "" {
+			caller = "unknown"
+		}
 
 		wrapped := &statusWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		next.ServeHTTP(wrapped, r)
 
 		latency := time.Since(start)
+		recordRequest(requestLogEntry{TS: start.UTC().Format(time.RFC3339Nano), Method: r.Method,
+			Path: r.URL.Path, CallerInstance: caller, CorrelationID: corrID, Status: wrapped.statusCode})
 		logJSON(map[string]any{
-			"ts":         start.Format(time.RFC3339Nano),
-			"corr_id":    corrID,
-			"method":     r.Method,
-			"path":       r.URL.Path,
-			"status":     wrapped.statusCode,
-			"latency_ms": latency.Milliseconds(),
+			"ts":              start.Format(time.RFC3339Nano),
+			"corr_id":         corrID,
+			"caller_instance": caller,
+			"method":          r.Method,
+			"path":            r.URL.Path,
+			"status":          wrapped.statusCode,
+			"latency_ms":      latency.Milliseconds(),
 		})
 	})
 }

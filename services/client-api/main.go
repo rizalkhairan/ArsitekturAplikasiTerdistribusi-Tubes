@@ -18,6 +18,7 @@ import (
 	"github.com/rizalkhairan/distributed-system/client-api/internal/bnpb"
 	"github.com/rizalkhairan/distributed-system/client-api/internal/filter"
 	"github.com/rizalkhairan/distributed-system/client-api/internal/middleware"
+	"github.com/rizalkhairan/distributed-system/observability"
 )
 
 func main() {
@@ -32,14 +33,16 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
+	registry := obs.NewRegistry("client-api")
+	mux.Handle("GET /metrics", registry.Handler())
 	mux.HandleFunc("POST /auth/login", handleLogin(authProxy))
 	mux.HandleFunc("POST /auth/refresh", handleRefresh(authProxy))
 	mux.HandleFunc("POST /field-reports", authMiddleware(handleFieldReport(cfg)))
 	mux.HandleFunc("GET /hazards", authMiddleware(handleListHazards(bnpbClient, cfg.MaxLimit)))
 	mux.HandleFunc("GET /hazards/{id}", authMiddleware(handleGetHazard(bnpbClient)))
 
-	// Middleware chain: correlation → logging → rate limit → routes
-	rateLimiter := middleware.NewRateLimiter(cfg.MaxConcurrent)
+	// Correlation -> logging -> priority admission -> routes
+	rateLimiter := middleware.NewPriorityLimiter(cfg.MaxConcurrent, cfg.ReservedConcurrent, registry)
 	handler := middleware.CorrelationID(
 		middleware.Logging(
 			rateLimiter.Middleware(mux),

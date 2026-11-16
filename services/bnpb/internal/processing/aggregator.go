@@ -31,7 +31,19 @@ type FailedMessage struct {
 	ReceivedAt  time.Time
 }
 
+// ErrNotFound lets a storage-backed lookup signal "no prior projection yet".
+var ErrNotFound = errors.New("not found")
+
+// Lookup retrieves a previously stored hazard for merge-on-warning.
+type Lookup func(ctx context.Context, source, refID string) (database.HazardEvent, error)
+
 func AggregateBMKG(ctx context.Context, db *sql.DB, events []*pb.SeismicEvent, warnings []*pb.TsunamiWarning, cursors database.Cursors) (Batch, error) {
+	return AggregateBMKGWithLookup(ctx, func(ctx context.Context, source, refID string) (database.HazardEvent, error) {
+		return database.FindHazard(ctx, db, source, refID)
+	}, events, warnings, cursors)
+}
+
+func AggregateBMKGWithLookup(ctx context.Context, lookup Lookup, events []*pb.SeismicEvent, warnings []*pb.TsunamiWarning, cursors database.Cursors) (Batch, error) {
 	next := database.Cursors{
 		database.SeismicFeed: cursors[database.SeismicFeed],
 		database.TsunamiFeed: cursors[database.TsunamiFeed],
@@ -48,7 +60,7 @@ func AggregateBMKG(ctx context.Context, db *sql.DB, events []*pb.SeismicEvent, w
 	}
 
 	// A warning can arrive for an event older than the seismic cursor.
-	events, warnings, err := mergeBMKG(ctx, db, events, warnings)
+	events, warnings, err := mergeBMKGWithLookup(ctx, lookup, events, warnings)
 	if err != nil {
 		return Batch{}, err
 	}

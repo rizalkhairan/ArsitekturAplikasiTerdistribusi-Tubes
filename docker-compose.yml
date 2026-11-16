@@ -103,14 +103,28 @@ services:
 
   bnpb:
     build:
-      context: ./services
-      dockerfile: bnpb/Dockerfile
+      context: .
+      dockerfile: services/bnpb/Dockerfile
     env_file:
       - ./services/bnpb/.env
     environment:
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
       INGEST_PIPELINE_URL: http://ingest-pipeline:8094
       PIPELINE_INTERNAL_TOKEN: ${PIPELINE_INTERNAL_TOKEN:-local-dev-pipeline-internal-token}
+      COORDINATOR_URL: http://coordinator:8080
+      COORDINATOR_TOKEN: ${COORDINATOR_TOKEN:-local-dev-coordinator-token}
+      STORAGE_URL: http://canonical-store:8080
+      STORAGE_TOKEN: ${CANONICAL_WRITE_TOKEN:-local-dev-canonical-write-token}
+      DLQ_URL: http://ingest-pipeline:8094
+      DLQ_TOKEN: ${PIPELINE_INTERNAL_TOKEN:-local-dev-pipeline-internal-token}
+      AUDIT_TOKEN: ${AUDIT_TOKEN:-local-dev-audit-token}
+      NOTIFIER_URL: http://field-notifier:8080
+      NOTIFIER_TOKEN: ${NOTIFIER_TOKEN:-local-dev-notifier-token}
+      SENSOR_URL: http://sensor-pantai:8080
+      PANTAI_AUTH_TOKEN: ${PANTAI_AUTH_TOKEN:-local-dev-pantai-token}
+      INSTANCE_ID: bnpb-compose
+      KAFKA_ENABLED: "true"
+      MIRROR_LOCAL_DB: "true"
     volumes:
       - bnpb-data:/app/data
     ports:
@@ -133,6 +147,14 @@ services:
         condition: service_started
       ingest-pipeline:
         condition: service_healthy
+      coordinator:
+        condition: service_started
+      canonical-store:
+        condition: service_started
+      field-notifier:
+        condition: service_started
+      sensor-pantai:
+        condition: service_started
 
   dashboard-updater:
     build: ./services/dashboard-updater
@@ -229,7 +251,9 @@ services:
       - auth-data:/app/data
 
   client-api:
-    build: ./services/client-api
+    build:
+      context: .
+      dockerfile: services/client-api/Dockerfile
     ports:
       - "9080:8080"
     env_file:
@@ -241,6 +265,8 @@ services:
       BNPB_INTERNAL_KEY: ${INTERNAL_API_KEY}
       INGEST_PIPELINE_URL: http://ingest-pipeline:8094
       FIELD_REPORT_TOKEN: ${FIELD_REPORT_TOKEN:-local-dev-field-report-token}
+      MAX_CONCURRENT_REQUESTS: ${MAX_CONCURRENT_REQUESTS:-200}
+      RESERVED_FIELD_CAPACITY: ${RESERVED_FIELD_CAPACITY:-80}
     depends_on:
       - bnpb
       - auth
@@ -324,6 +350,80 @@ services:
       retries: 5
       start_period: 10s
 
+  coordinator:
+    build:
+      context: .
+      dockerfile: services/coordinator/Dockerfile
+    environment:
+      STATE_PATH: /data/coordinator.json
+      ADDR: ":8080"
+      COORDINATOR_TOKEN: ${COORDINATOR_TOKEN:-local-dev-coordinator-token}
+    volumes:
+      - coordinator-data:/data
+    ports:
+      - "8099:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/readyz > /dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  canonical-store:
+    build:
+      context: .
+      dockerfile: services/canonical-store/Dockerfile
+    environment:
+      DATA_PATH: /data/events.json
+      ADDR: ":8080"
+      WRITE_TOKEN: ${CANONICAL_WRITE_TOKEN:-local-dev-canonical-write-token}
+      AUDIT_TOKEN: ${AUDIT_TOKEN:-local-dev-audit-token}
+      NODE_NAME: local
+      POD_NAME: canonical-store-compose
+      STORAGE_UNIT: canonical-0
+    volumes:
+      - canonical-data:/data
+    ports:
+      - "8095:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/readyz > /dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  field-notifier:
+    build:
+      context: .
+      dockerfile: services/field-notifier/Dockerfile
+    environment:
+      ADDR: ":8080"
+      NOTIFIER_TOKEN: ${NOTIFIER_TOKEN:-local-dev-notifier-token}
+    ports:
+      - "8097:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/health > /dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  sensor-pantai:
+    image: sustuna/sensor-pantai@sha256:51fbd90d3891ad6e9f5768ad330ffb65205644cb29e50da65c7538f2e0b4397d
+    environment:
+      PANTAI_PROFILE: ${PANTAI_PROFILE:-practice}
+      PANTAI_SEED: ${PANTAI_SEED:-42}
+      PANTAI_SPEED: ${PANTAI_SPEED:-60}
+      PANTAI_AUTH_TOKEN: ${PANTAI_AUTH_TOKEN:-local-dev-pantai-token}
+    ports:
+      - "8087:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/healthz > /dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
 volumes:
   kafka-data:
   bmkg-data:
@@ -332,3 +432,5 @@ volumes:
   auth-data:
   ingest-data:
   satellite-data:
+  coordinator-data:
+  canonical-data:

@@ -26,3 +26,9 @@ client/target/
 
 tests/*
 doc/*
+# M2 local runtime data and raw load-test output
+services/coordinator/data/
+services/canonical-store/data/
+loadtest/results/*
+!loadtest/results/README.md
+deploy/secrets.yaml

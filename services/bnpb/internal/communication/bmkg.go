@@ -7,8 +7,8 @@ import (
 	"log"
 	"time"
 
-	pb "github.com/rizalkhairan/distributed-system/bmkg/proto"
 	"github.com/google/uuid"
+	pb "github.com/rizalkhairan/distributed-system/bmkg/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -27,6 +27,7 @@ func newBMKGClient(address, key string, timeout time.Duration) (*BMKGClient, err
 			ctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			ctx = metadata.AppendToOutgoingContext(ctx, "x-bmkg-key", key)
+			ctx = metadata.AppendToOutgoingContext(ctx, "x-caller-instance", instanceID())
 
 			// Propagate correlation ID
 			corrID := getCorrelationIDFromContext(ctx)

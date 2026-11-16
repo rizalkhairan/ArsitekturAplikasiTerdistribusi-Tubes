@@ -13,6 +13,12 @@ import (
 )
 
 func mergeBMKG(ctx context.Context, db *sql.DB, events []*pb.SeismicEvent, warnings []*pb.TsunamiWarning) ([]*pb.SeismicEvent, []*pb.TsunamiWarning, error) {
+	return mergeBMKGWithLookup(ctx, func(ctx context.Context, source, refID string) (database.HazardEvent, error) {
+		return database.FindHazard(ctx, db, source, refID)
+	}, events, warnings)
+}
+
+func mergeBMKGWithLookup(ctx context.Context, lookup Lookup, events []*pb.SeismicEvent, warnings []*pb.TsunamiWarning) ([]*pb.SeismicEvent, []*pb.TsunamiWarning, error) {
 	byEvent := make(map[string]*pb.SeismicEvent)
 	byWarning := make(map[string]*pb.TsunamiWarning)
 	affected := make(map[string]bool)
@@ -25,8 +31,11 @@ func mergeBMKG(ctx context.Context, db *sql.DB, events []*pb.SeismicEvent, warni
 	}
 
 	for refID := range affected {
-		stored, err := database.FindHazard(ctx, db, "BMKG", refID)
+		stored, err := lookup(ctx, "BMKG", refID)
 		if errors.Is(err, sql.ErrNoRows) && byEvent[refID] != nil {
+			continue
+		}
+		if errors.Is(err, ErrNotFound) && byEvent[refID] != nil {
 			continue
 		}
 		if err != nil {

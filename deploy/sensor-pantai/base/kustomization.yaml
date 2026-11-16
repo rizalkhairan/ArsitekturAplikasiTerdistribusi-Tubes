@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# The required verbatim manifest is ../base.yaml. This directory mirrors it only
+# because kustomize overlays must reference a directory, not a file. Keep the
+# two in sync with scripts/check-sensor-base.sh.
+resources:
+  - deployment.yaml

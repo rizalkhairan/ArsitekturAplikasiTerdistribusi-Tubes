@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pvmbg
+  labels: {app: pvmbg, role: mock}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: pvmbg}
+  template:
+    metadata:
+      labels: {app: pvmbg, role: mock}
+    spec:
+      containers:
+        - name: pvmbg
+          image: bnpb-gateway/pvmbg:m2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8082}
+          env:
+            - {name: PORT, value: "8082"}
+            - {name: DB_PATH, value: /app/data/pvmbg.db}
+            - {name: PVMBG_MIN_DELAY_MS, value: "500"}
+            - {name: PVMBG_MAX_DELAY_MS, value: "3000"}
+            - name: PVMBG_TOKEN
+              valueFrom: {secretKeyRef: {name: bnpb-secrets, key: PVMBG_TOKEN}}
+            - name: ADMIN_USERNAME
+              valueFrom: {secretKeyRef: {name: bnpb-secrets, key: PVMBG_ADMIN_USERNAME}}
+            - name: ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: bnpb-secrets, key: PVMBG_ADMIN_PASSWORD}}
+          readinessProbe: {httpGet: {path: /health, port: 8082}, initialDelaySeconds: 3, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /health, port: 8082}, initialDelaySeconds: 5, periodSeconds: 10}
+          resources:
+            requests: {memory: 64Mi}
+            limits: {memory: 128Mi}
+          volumeMounts:
+            - {name: data, mountPath: /app/data}
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pvmbg
+spec:
+  selector: {app: pvmbg}
+  ports:
+    - {name: http, port: 8082, targetPort: 8082}

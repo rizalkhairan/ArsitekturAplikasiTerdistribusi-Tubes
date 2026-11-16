@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: coordinator-data
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coordinator
+  labels: {app: coordinator, role: store}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: coordinator}
+  template:
+    metadata:
+      labels: {app: coordinator, role: store}
+    spec:
+      # Mandatory Tester scenarios kill workers only; pinning the single-writer
+      # coordination store to the control-plane is a conscious limitation.
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: coordinator
+          image: bnpb-gateway/coordinator:m2
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: ADDR, value: ":8080"}
+            - {name: STATE_PATH, value: /data/coordinator.json}
+            - name: COORDINATOR_TOKEN
+              valueFrom: {secretKeyRef: {name: bnpb-secrets, key: COORDINATOR_TOKEN}}
+          ports:
+            - {containerPort: 8080, name: http}
+          readinessProbe: {httpGet: {path: /readyz, port: 8080}, initialDelaySeconds: 3, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /health, port: 8080}, initialDelaySeconds: 5, periodSeconds: 10}
+          resources:
+            requests: {memory: 512Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: coordinator-data}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coordinator
+spec:
+  selector: {app: coordinator}
+  ports:
+    - {name: http, port: 8080, targetPort: 8080}

@@ -7,7 +7,9 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	pb "github.com/rizalkhairan/distributed-system/bmkg/proto"
@@ -17,6 +19,36 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+type requestLogEntry struct {
+	TS             string `json:"ts"`
+	Method         string `json:"method"`
+	CallerInstance string `json:"caller_instance"`
+	CorrelationID  string `json:"correlation_id"`
+	Status         int    `json:"status"`
+}
+
+var (
+	requestMu  sync.Mutex
+	requestLog []requestLogEntry
+)
+
+func recordRequest(entry requestLogEntry) {
+	requestMu.Lock()
+	defer requestMu.Unlock()
+	requestLog = append(requestLog, entry)
+	if len(requestLog) > 5000 {
+		requestLog = requestLog[len(requestLog)-5000:]
+	}
+}
+
+func snapshotRequests() []requestLogEntry {
+	requestMu.Lock()
+	defer requestMu.Unlock()
+	out := make([]requestLogEntry, len(requestLog))
+	copy(out, requestLog)
+	return out
+}
 
 type server struct {
 	pb.UnimplementedBMKGServer
@@ -41,6 +73,7 @@ func main() {
 
 	seedEvents()
 	go generateEvents()
+	go serveAdmin(os.Getenv("ADMIN_ADDR"))
 
 	listener, err := net.Listen("tcp", ":"+port)
 	if err != nil {
@@ -107,15 +140,22 @@ func authInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, h
 
 	// Auth check
 	keys := md.Get("x-bmkg-key")
+	caller := "unknown"
+	if values := md.Get("x-caller-instance"); len(values) > 0 && values[0] != "" {
+		caller = values[0]
+	}
 	if len(keys) == 0 || keys[0] == "" || keys[0] != os.Getenv("BMKG_API_KEY") {
 		latency := time.Since(start)
+		recordRequest(requestLogEntry{TS: start.UTC().Format(time.RFC3339Nano), Method: info.FullMethod,
+			CallerInstance: caller, CorrelationID: corrID, Status: 401})
 		logStructured(map[string]any{
-			"ts":         start.Format(time.RFC3339Nano),
-			"corr_id":    corrID,
-			"method":     info.FullMethod,
-			"status":     401,
-			"latency_ms": latency.Milliseconds(),
-			"error":      "unauthorized",
+			"ts":              start.Format(time.RFC3339Nano),
+			"corr_id":         corrID,
+			"caller_instance": caller,
+			"method":          info.FullMethod,
+			"status":          401,
+			"latency_ms":      latency.Milliseconds(),
+			"error":           "unauthorized",
 		})
 		return nil, status.Error(codes.Unauthenticated, "invalid BMKG key")
 	}
@@ -128,12 +168,15 @@ func authInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, h
 	if err != nil {
 		logStatus = 500
 	}
+	recordRequest(requestLogEntry{TS: start.UTC().Format(time.RFC3339Nano), Method: info.FullMethod,
+		CallerInstance: caller, CorrelationID: corrID, Status: logStatus})
 	logStructured(map[string]any{
-		"ts":         start.Format(time.RFC3339Nano),
-		"corr_id":    corrID,
-		"method":     info.FullMethod,
-		"status":     logStatus,
-		"latency_ms": latency.Milliseconds(),
+		"ts":              start.Format(time.RFC3339Nano),
+		"corr_id":         corrID,
+		"caller_instance": caller,
+		"method":          info.FullMethod,
+		"status":          logStatus,
+		"latency_ms":      latency.Milliseconds(),
 	})
 
 	return resp, err
@@ -177,4 +220,23 @@ func (s *server) GetTsunamiWarnings(ctx context.Context, req *pb.GetTsunamiWarni
 		return nil, status.Error(codes.Internal, "database error")
 	}
 	return &pb.GetTsunamiWarningsResponse{Warnings: warnings}, nil
+}
+
+func serveAdmin(address string) {
+	if address == "" {
+		address = ":8083"
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /admin/requests", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(snapshotRequests())
+	})
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	server := &http.Server{Addr: address, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Printf("BMKG admin server failed: %v", err)
+	}
 }

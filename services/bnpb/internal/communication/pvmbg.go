@@ -34,6 +34,7 @@ func (c *PVMBGClient) get(ctx context.Context, path string, out any) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Caller-Instance", instanceID())
 
 	// Propagate correlation ID
 	corrID := getCorrelationIDFromContext(ctx)
