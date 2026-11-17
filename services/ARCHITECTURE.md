@@ -96,10 +96,10 @@ replication, routing and recovery protocols to the application.
 | Geographic/range by area | Regional bursts concentrate data/writes | Efficient regional targeting; hot areas need splitting/balancing. |
 | Hash stable event identity — selected | Distinct events from a region spread across shards | Area/national queries span shards; updates to one event remain concentrated. |
 
-Proposed distribution column: an unambiguous `event_key` derived from
-`(source, source_ref_id)`. Include it in uniqueness constraints and colocate
-event/outbox records where possible. Exact schema and shard count remain
-open pending contracts and dataset sizing.
+The implemented distribution column is `event_key`, the JSON-encoded exact
+`[source, source_ref_id]` pair. Event and outbox tables include it in their
+primary keys and share 48 hash shards. This is an initial implementation
+default; dataset sizing and distribution evidence remain pending.
 
 Citus owns placement metadata; no application hash ring. Register new data
 workers and rebalance to redistribute existing shards. The coordinator also
@@ -144,6 +144,11 @@ Configure synchronous replication, promotion eligibility, degraded transitions
 and detection timeouts. Streaming replication is asynchronous by default;
 strict synchronous mode can block writes without a standby. Single-copy
 commits cannot survive loss of the remaining copy before repair.
+
+The initial storage overlay uses strict synchronous mode and `remote_apply`;
+it rejects writes when any group's synchronous standby is absent. The degraded
+continuity/repair transitions above are intended recovery behavior, not yet
+implemented by that overlay. See [deployment details](../deploy/README.md#canonical-postgresql-storage).
 
 Fence isolated/resumed database primaries and separately reject stale poller
 ownership. Validate clock skew, freeze/resume, partitions and disk loss.

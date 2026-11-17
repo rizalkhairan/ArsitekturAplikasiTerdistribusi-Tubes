@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/api"
+	"github.com/rizalkhairan/distributed-system/bnpb/internal/canonical"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/communication"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/database"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/health"
@@ -31,6 +32,11 @@ func main() {
 	cfg, err := loadConfig()
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if cfg.StorageBackend == "postgres" {
+		runCanonical(ctx, cfg, t)
+		return
 	}
 
 	// Init db
@@ -90,6 +96,63 @@ func main() {
 	defer cancel()
 	readAPI.Shutdown(shutdownCtx)
 	wg.Wait()
+}
+
+// B's lease-aware pollers call the canonical boundary. The unfenced M1 pollers
+// must never run against PostgreSQL or acquire implicit authority at startup.
+func runCanonical(ctx context.Context, cfg config, t *telemetry.Runtime) {
+	credentials, err := canonical.ParseCredentials(cfg.CanonicalCredentials)
+	if err != nil {
+		log.Fatal(err)
+	}
+	for token := range credentials {
+		if token == cfg.InternalAPIKey {
+			log.Fatal("canonical service credentials must differ from the M1 read credential")
+		}
+	}
+	startup, cancel := context.WithTimeout(ctx, 10*time.Second)
+	store, err := canonical.Open(startup, cfg.CanonicalDSN, cfg.KafkaTopic)
+	cancel()
+	if err != nil {
+		log.Fatal("canonical PostgreSQL connection failed")
+	}
+	defer store.DB.Close()
+	publisher, err := messaging.NewKafkaPublisher(cfg.KafkaBrokers, cfg.KafkaClientID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer publisher.Close()
+	server := api.NewCanonicalServer(":"+cfg.APIPort, store, credentials, cfg.InternalAPIKey, health.New(), cfg.StalenessThreshold, t)
+	var workers sync.WaitGroup
+	workers.Go(func() {
+		if err := server.Start(); err != nil && err != http.ErrServerClosed {
+			log.Printf("canonical HTTP server: %v", err)
+		}
+	})
+	workers.Go(func() { serveHealth(ctx, cfg.HealthAddress) })
+	workers.Go(func() {
+		ticker := time.NewTicker(cfg.OutboxPollInterval)
+		defer ticker.Stop()
+		for {
+			sweep, cancel := context.WithTimeout(ctx, 8*time.Second)
+			err := store.Publish(sweep, publisher.Publish)
+			cancel()
+			if err != nil && ctx.Err() == nil {
+				log.Printf("canonical outbox pending: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	})
+	log.Print("PostgreSQL canonical API active; lease-aware producer integration required")
+	<-ctx.Done()
+	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	server.Shutdown(shutdown)
+	workers.Wait()
 }
 
 func serveHealth(ctx context.Context, address string) {

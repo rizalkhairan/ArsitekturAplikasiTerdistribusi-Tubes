@@ -11,6 +11,7 @@ COPY bmkg/proto /src/bmkg/proto
 COPY bnpb/ ./
 COPY shared/ /src/shared/
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/bnpb .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/canonical-admin ./cmd/canonical-admin
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates \
@@ -18,6 +19,7 @@ RUN apk add --no-cache ca-certificates \
     && mkdir -p /app/data && chown bnpb:bnpb /app/data
 WORKDIR /app
 COPY --from=builder /out/bnpb ./bnpb
+COPY --from=builder /out/canonical-admin ./canonical-admin
 ENV DB_PATH=/app/data/bnpb.db
 EXPOSE 8080
 USER bnpb

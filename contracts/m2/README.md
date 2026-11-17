@@ -120,9 +120,12 @@ previous cursor. If B crashes before CAS, replay the same window/mutations and
 reuse the receipt. If ownership changes, an old B cannot seal or commit a window;
 the successor replays and seals under its own epoch. Zero-result windows also
 need a receipt. B must not skip windows following a failed CAS. Batch/seal and
-lease-install routes and cross-store reconciliation are deliberately **not frozen
-by this stub**: A/B must settle those before A07; per-event PUT alone does not
-establish exactly-once acquisition.
+lease-install routes are **not frozen by this stub**. The PostgreSQL
+implementation supplies `PUT /internal/canonical/authority` and
+`POST /internal/canonical/windows` as concrete proposals for A/B review; see
+[deployment and handoff details](../../deploy/README.md#canonical-postgresql-storage).
+B's lease issuance, cursor CAS and cross-store reconciliation still require
+integration; per-event PUT alone does not establish exactly-once acquisition.
 
 The stub has one fixed trusted partition per source (`BMKG`, `PVMBG`, `SATELIT`,
 `SENSOR_PANTAI`), all at epoch 1. It rejects other partitions/epochs and only

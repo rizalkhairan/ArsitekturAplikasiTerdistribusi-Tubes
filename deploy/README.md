@@ -4,6 +4,100 @@ Run `make` for available commands. Shared prerequisites: Python 3.11+, Make,
 Git, OpenSSH and kubectl with Kustomize. Platform labels, ports, credentials and
 resource classes follow [the platform conventions](../contracts/m2/PLATFORM.md).
 
+## Canonical PostgreSQL storage
+
+The opt-in overlay uses PostgreSQL 16.6/Citus 13.0.1/Patroni 4.1.5 and the six
+existing canonical local PVs in [the architecture](../services/ARCHITECTURE.md).
+Each pair has required node anti-affinity and 512Mi/1Gi memory settings. Three
+stateless Aggregators use soft spreading, permitting B's later 3 → 5 → 2 test.
+
+```bash
+make canonical-render
+make images CANONICAL_STORAGE=postgres
+make deploy CANONICAL_STORAGE=postgres             # Provisioned k3s nodes
+# Development alternative: three kind nodes; allow about 9GiB Docker RAM
+make dev-up CANONICAL_STORAGE=postgres DEV_NODES=3 BUILD_IMAGES=1
+make canonical-check SECURITY_PROFILE=--dev        # Omit profile on k3s
+```
+
+This switches backends without importing SQLite. For an existing dataset,
+quiesce M1 polling/publication first, retain the database, and keep clients and
+producers stopped until import/verification finish. The overlay retains the M1
+PVC. Supply `CANONICAL_ADMIN_DSN` through the environment using a private
+administrator connection/tunnel, then run:
+
+```bash
+cd services/bnpb
+go run ./cmd/canonical-admin -sqlite /path/to/quiescent/bnpb.db import-m1
+```
+
+Import opens SQLite read-only and preserves IDs, ingestion timestamps, broker
+message IDs/payloads and publication state. It initializes versions to 1 with
+source-named partitions; producers resume above that version. Conflicting IDs
+abort the import; repeated imports preserve newer versions. Normal Aggregators
+receive only `canonical_app` credentials; a separate Job initializes the schema.
+
+Preserve private `deploy/k3s/.canonical.env` for redeployment. Three Secrets
+separate cluster/replication credentials, schema-administrator DSN, and
+Aggregator DSN/service-token mappings. Changing Secrets alone does not rotate
+database passwords. B's three initial poller identities have distinct tokens;
+additional replicas require provisioned identities. C receives only its own
+producer token. Keep `CANONICAL_STORAGE=postgres` on subsequent deployments;
+tooling refuses an accidental SQLite rollback.
+
+Events/outbox rows use 48 colocated hash shards keyed by the exact JSON-encoded
+`[source, source_ref_id]` pair; geography is excluded. Physical replication
+protects each group. Patroni uses Kubernetes Endpoints as DCS and updates Citus
+routing; `postgres-role` preserves `role=store`. Explicit projected API tokens
+and namespace-scoped Patroni RBAC coexist with private PVC/Secret admission and
+database ingress restrictions.
+
+The initial policy requires all three synchronous standbys, strict synchronous
+Patroni mode and `synchronous_commit=remote_apply`. Successful mutations return
+`durability: replicated`; retries force fresh WAL before acknowledgement to
+cover uncertain prior commits. A missing standby returns 503. Single-copy
+availability, safe promotion, repair and membership changes remain recovery
+work; do not disable strict mode to claim that behavior. Database primary
+fencing under freeze/partition still needs live failure tests.
+
+The [canonical contract](../contracts/m2/README.md) defines authenticated event
+PUTs, versions and retractions. Two implemented handoff routes need B/C review:
+
+- `PUT /internal/canonical/authority`, authority-only credential:
+  `{partition, epoch, owner, expires_at}`. Higher epochs transfer ownership;
+  same-epoch renewals require the same owner and a valid lease. Database time
+  governs expiry. Installation and mutations lock the same persisted row.
+- `POST /internal/canonical/windows`, producer credential:
+  `{authority, window_id, previous_cursor, next_cursor, items}`, with items
+  `{source, source_ref_id, mutation}`. The entire batch and receipt commit
+  atomically, including empty windows. Retries preserve content. B must CAS its
+  cursor only after success, verifying current owner/epoch and prior cursor.
+  These routes do not implement B's lease issuance or cursor CAS.
+
+PostgreSQL mode disables unfenced M1 pollers; B connects lease-aware polling and
+C persists producer versions. Updates/retractions produce outbox messages with
+`event_id`, `version` and `operation`. Publication is at least once and orders
+pending changes per identity; consumers must reject duplicate/older versions
+and handle retractions. Existing `/hazards` reads retain internal authentication
+and fields; failed queries return 503. Snapshot pagination, partial reads,
+Audit and analytics remain subsequent work.
+
+```bash
+make platform-check
+make canonical-test           # SQL tests skip unless CANONICAL_TEST_DSN is set
+make canonical-integration    # Disposable Docker: 3 primaries + 3 standbys
+```
+
+The integration runner removes only its own containers/network. It checks real
+Citus transactions, version/epoch races, receipts, outbox retries, M1 import,
+shard placement, WAL replay and rejection after standby loss. It does not run
+Patroni/Kubernetes. These checks do not prove separate-kernel durability,
+promotion, partition safety, live policy enforcement or B/C end-to-end ingest.
+Use `canonical-check` for live placement/replication readiness before collecting
+failure evidence. Configuration follows the official
+[Patroni Citus integration](https://patroni.readthedocs.io/en/latest/citus.html)
+and [replication guidance](https://patroni.readthedocs.io/en/latest/replication_modes.html).
+
 ## Container development
 
 Requires Docker and kind v0.30.0. On Windows, run from WSL2 with Docker Desktop

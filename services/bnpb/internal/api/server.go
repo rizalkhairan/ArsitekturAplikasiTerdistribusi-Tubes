@@ -6,14 +6,17 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/rizalkhairan/distributed-system/bnpb/internal/canonical"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/health"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/middleware"
 	"github.com/rizalkhairan/distributed-system/shared/telemetry"
 )
 
 type Server struct {
+	canonical          *canonical.Store
 	db                 *sql.DB
 	server             *http.Server
 	internalKey        string
@@ -22,11 +25,26 @@ type Server struct {
 }
 
 func NewServer(addr string, db *sql.DB, internalKey string, registry *health.Registry, stalenessThreshold time.Duration, runtimes ...*telemetry.Runtime) *Server {
+	return newServer(addr, db, nil, nil, internalKey, registry, stalenessThreshold, runtimes...)
+}
+
+func NewCanonicalServer(addr string, store *canonical.Store, credentials map[string]canonical.Principal, internalKey string, registry *health.Registry, stalenessThreshold time.Duration, runtime *telemetry.Runtime) *Server {
+	return newServer(addr, nil, store, credentials, internalKey, registry, stalenessThreshold, runtime)
+}
+
+func newServer(addr string, db *sql.DB, store *canonical.Store, credentials map[string]canonical.Principal, internalKey string, registry *health.Registry, stalenessThreshold time.Duration, runtimes ...*telemetry.Runtime) *Server {
 	s := &Server{db: db, internalKey: internalKey, health: registry, stalenessThreshold: stalenessThreshold}
+	s.canonical = store
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
+	if store != nil {
+		mux.HandleFunc("GET /ready", s.handleReady)
+	}
 	mux.HandleFunc("GET /hazards", s.handleListHazards)
 	mux.HandleFunc("GET /hazards/{id}", s.handleGetHazard)
+	if store != nil {
+		mux.Handle("/internal/canonical/", canonical.Handler(store, credentials))
+	}
 
 	var handler http.Handler
 	if len(runtimes) > 0 && runtimes[0] != nil {
@@ -48,7 +66,7 @@ func NewServer(addr string, db *sql.DB, internalKey string, registry *health.Reg
 // internalAuth checks the shared secret for internal service-to-service calls.
 func (s *Server) internalAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health" || (s.canonical != nil && (r.URL.Path == "/ready" || strings.HasPrefix(r.URL.Path, "/internal/canonical/"))) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -73,6 +91,18 @@ func (s *Server) Shutdown(ctx context.Context) error {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+	defer cancel()
+	var ready bool
+	err := s.canonical.DB.QueryRowContext(ctx, `SELECT to_regclass('canonical.events') IS NOT NULL`).Scan(&ready)
+	if err != nil || !ready {
+		writeError(w, 503, "canonical database/schema unavailable")
+		return
+	}
+	s.handleHealth(w, r)
 }
 
 // writeFreshnessHeaders attaches an explicit data-freshness marker to every hazard

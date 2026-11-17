@@ -249,6 +249,9 @@ def cluster_check(inv):
 def render(tag="dev"):
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", tag):
         raise ValueError("Invalid image tag")
+    if os.getenv("CANONICAL_STORAGE") == "postgres":
+        import canonical
+        return canonical.render(tag)
     parent = ROOT / "deploy/kubernetes"
     with tempfile.TemporaryDirectory(prefix=".render-", dir=parent) as directory:
         overlay = {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization",
@@ -306,6 +309,10 @@ def images(architecture=None):
         run(["docker", "build", "--platform", "linux/" + architecture, "-t", image,
              "-f", directory / "Dockerfile", context])
         built.append(image)
+    if os.getenv("CANONICAL_STORAGE") == "postgres":
+        from canonical import IMAGE
+        run(["docker", "build", "--platform", "linux/" + architecture, "-t", IMAGE, ROOT / "deploy/canonical"])
+        built.append(IMAGE)
     from observability import IMAGES
     for image in (KAFKA, *IMAGES.values()):
         run(["docker", "pull", "--platform", "linux/" + architecture, image])
@@ -331,6 +338,9 @@ def image_bundle(inv):
         raise ValueError("Image bundle architecture does not match inventory")
     from observability import IMAGES
     expected = {f"bnpb.local/{name}:{tag}" for name in APPS} | {KAFKA} | set(IMAGES.values())
+    if os.getenv("CANONICAL_STORAGE") == "postgres":
+        from canonical import IMAGE
+        expected.add(IMAGE)
     if set(metadata.get("images", [])) != expected:
         raise ValueError("Image bundle must include application, Kafka and observability images")
     if metadata.get("sha256") != file_sha256(archive):
@@ -348,6 +358,8 @@ def deploy():
     archive, tag = image_bundle(inv)
     manifests = render(tag)
     cluster_check(inv)
+    from canonical import check_backend
+    check_backend(kubectl)
     for node in inv["nodes"]:
         prepare_disks(node)
         print(f"Importing images on {node['name']}", flush=True)
@@ -361,7 +373,13 @@ def deploy():
     from security import install
     install(kubectl)
     apply_secrets(creds)
+    if os.getenv("CANONICAL_STORAGE") == "postgres":
+        from canonical import apply_secrets as canonical_secrets
+        canonical_secrets(kubectl)
     kubectl("apply", "-f", "-", data=manifests)
+    if os.getenv("CANONICAL_STORAGE") == "postgres":
+        from canonical import initialize
+        initialize(kubectl, tag)
     kubectl("-n", NS, "rollout", "status", "deployment/kafka", "--timeout=240s")
     # Re-run idempotent topic creation after every deploy, including broker disk replacement.
     kubectl("-n", NS, "delete", "job", "topic-init", "--ignore-not-found", "--wait=true")

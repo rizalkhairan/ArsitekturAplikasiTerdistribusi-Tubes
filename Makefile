@@ -23,6 +23,8 @@ help:
 	@echo 'make observability-forward  Open a localhost Grafana tunnel (OBSERVABILITY_PROFILE=--dev for kind)'
 	@echo 'make observability-check    Check telemetry backend readiness and application scrapes'
 	@echo 'make platform-check Run deployment checks'
+	@echo 'make canonical-render  Preview the opt-in PostgreSQL/Citus/Patroni overlay'
+	@echo 'make canonical-integration  Test canonical SQL with three synchronous replica pairs'
 	@echo 'make dev-network    Add NetworkPolicy enforcement to the kind profile'
 	@echo 'make tester-check   Verify Tester Agent on every node and list practice scenarios'
 	@echo 'make isolation-check Verify admission, RBAC and network enforcement'
@@ -118,3 +120,16 @@ observability-validate:
 .PHONY: telemetry-smoke
 telemetry-smoke:
 	$(PYTHON) deploy/k3s/telemetry_smoke.py $(OBSERVABILITY_PROFILE)
+
+.PHONY: canonical-render canonical-check canonical-test canonical-integration
+canonical-render:
+	@$(PYTHON) deploy/k3s/canonical.py render
+
+canonical-check:
+	$(PYTHON) deploy/k3s/canonical.py check $(SECURITY_PROFILE)
+
+canonical-test:
+	cd services/bnpb && go test -race ./internal/canonical ./internal/api
+
+canonical-integration:
+	$(PYTHON) deploy/k3s/canonical_smoke.py
