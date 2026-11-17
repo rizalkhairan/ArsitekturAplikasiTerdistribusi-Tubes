@@ -681,19 +681,19 @@ To inject poison Kafka records for the malformed-message demonstration, publish 
 
 ---
 
-## 10. Milestone 2 - Problem 2: Aggregator resilience
+## 10. Milestone 2 - Problem 2: Ketahanan Aggregator
 
-P2 runs on the M2 canonical contract in `contracts/m2/README.md` and shares the
-ingest pipeline with P3/P4.
+Problem 2 memakai kontrak kanonik M2 pada `contracts/m2/README.md` dan berbagi
+ingest pipeline dengan Problem 3/4.
 
-Components:
+Komponen:
 
-- `services/coordinator` — durable per-source leases, monotonic epochs, checkpoint CAS, critical-alert outbox.
-- `services/canonical-store` — working canonical store until A delivers PostgreSQL/Citus. It implements versioned upsert/retract, authority-epoch fencing, tombstones, audit checksum/location and cursor queries.
-- `services/bnpb` — leader-elected BMKG/PVMBG/Sensor pollers, readiness, graceful drain, audit proxy, and active-passive ownership per source.
-- `services/client-api` — stateless read entry point used by the load tests.
+- `services/coordinator` — lease per sumber, epoch monotonik, CAS checkpoint, dan outbox peringatan kritis.
+- `services/canonical-store` — penyimpanan kanonik sementara sampai A menyediakan PostgreSQL/Citus. Mendukung upsert/retract berversi, fencing epoch otoritas, tombstone, audit checksum/location, dan query cursor.
+- `services/bnpb` — poller BMKG/PVMBG/Sensor dengan leader election, readiness, graceful drain, audit proxy, dan kepemilikan aktif-pasif per sumber.
+- `services/client-api` — titik masuk baca stateless yang dipakai load test.
 
-### Run locally
+### Jalankan secara lokal
 
 ```bash
 cp .env.example .env
@@ -701,7 +701,7 @@ make dev-up
 # coordinator :8099  canonical-store :8095  ingest :8094  sensor :8087
 ```
 
-### Run on Kubernetes
+### Jalankan di Kubernetes
 
 ```bash
 ./scripts/build-images.sh
@@ -709,18 +709,103 @@ make k8s-up
 kubectl -n sistem-informasi-kebencanaan-bnpb get pods -o wide
 ```
 
-The namespace, `role` labels, memory classes, local-PV stores, PDB, topology
-spread and single Aggregator Service are in `deploy/`.
+Namespace, label `role`, kelas memori, penyimpanan local-PV, PDB, topology spread,
+dan satu Service Aggregator tersedia di `deploy/`.
 
-### P2 tests
+### Pemeriksaan kriteria P2
+
+Semua perintah dijalankan di cluster demo dari root repository. Prasyarat:
+`kubectl`, `k6`, `jq`, `python3`, serta shell dengan `seq`/`awk`. Biarkan
+port-forward berikut tetap berjalan:
 
 ```bash
-./loadtest/scaling.sh              # 10k VUs / 120s, scale 3 -> 5 -> 2
-./loadtest/throughput.sh           # 1 vs 3 instances, target >= 2.0x
-./loadtest/rolling-update.sh       # zero unexpected failures
-./loadtest/duplicate-detector.sh   # mock caller logs + canonical rows
+kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/client-api 9080:8080 &
+kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/aggregator 18085:8085 &
+export BASE_URL=http://127.0.0.1:9080
+export AGG_URL=http://127.0.0.1:18085
+export INTERNAL_KEY='<INTERNAL_API_KEY dari bnpb-secrets>'
+```
+
+**Kriteria 1 — satu titik masuk, readiness nyata, penyebaran, PDB**
+
+```bash
+kubectl -n sistem-informasi-kebencanaan-bnpb get deploy aggregator -o wide
+kubectl -n sistem-informasi-kebencanaan-bnpb get pods -l app=aggregator -o wide
+kubectl -n sistem-informasi-kebencanaan-bnpb get endpoints aggregator
+kubectl -n sistem-informasi-kebencanaan-bnpb get pdb aggregator
+kubectl -n sistem-informasi-kebencanaan-bnpb describe deploy aggregator \
+  | grep -E 'Replicas|maxUnavailable|maxSurge|topologySpread|Readiness|preStop'
+```
+
+Expected: 3/3 ready, endpoint berisi 3 alamat pada minimal dua node, PDB
+`minAvailable: 2`, dan `maxUnavailable: 0`.
+
+**Kriteria 2 dan 6 — tepat sekali saat beban tinggi dan scaling 3→5→2**
+
+```bash
+./loadtest/scaling.sh
+jq '.metrics.error_rate_excl_controlled' loadtest/results/scaling-summary.json
+./loadtest/duplicate-detector.sh
+```
+
+Expected: error rate di bawah `0.01` di luar penolakan terkontrol, dan detector
+menghasilkan `RESULT: PASS` (tidak ada baris kanonik ganda, tidak ada dua
+instance pemanggil untuk sumber yang sama dalam satu detik).
+
+**Kriteria 3 dan 5 — instance pemimpin mati dan holder yang freeze**
+
+```bash
 ./scripts/integration-pause-leader.sh
 ```
+
+Expected: takeover dalam 60 detik (TTL 15 detik), holder yang bangun mencatat
+`lease_renew_failed_self_fencing` atau `409` dari penyimpanan, dan detector
+tetap lolos sebelum maupun sesudah instance pemimpin dimatikan.
+
+**Kriteria 4 — pergeseran jam node**
+
+```bash
+kubectl -n tester-agent exec daemonset/tester-agent -- /app list
+kubectl -n tester-agent exec daemonset/tester-agent -- /app run practice <skenario-clock-shift>
+./loadtest/duplicate-detector.sh
+kubectl -n sistem-informasi-kebencanaan-bnpb logs deploy/aggregator --tail=200 \
+  | grep -E 'fenced|stale_epoch|lease_renew_failed'
+```
+
+Expected: tidak ada dua penyimpanan yang sama-sama berhasil pada satu periode
+polling; holder yang epoch-nya basi ditolak oleh canonical store.
+
+**Kriteria 7 — 3 instance ≥ 2× throughput 1 instance**
+
+```bash
+./loadtest/throughput.sh
+```
+
+Expected: output berakhir dengan `ratio ... (target >= 2.0)` dan exit code 0.
+
+**Kriteria 8 — rolling update tanpa permintaan gagal**
+
+```bash
+./loadtest/rolling-update.sh
+jq '.metrics.unexpected_errors' loadtest/results/rolling-summary.json
+```
+
+Expected: `unexpected_errors=0`; penolakan terkontrol `429` tidak dihitung.
+
+**Audit proxy**
+
+```bash
+export AUDIT_TOKEN='<AUDIT_TOKEN dari bnpb-secrets>'
+for path in events checksum location unprocessed; do
+  curl -s -H "Authorization: Bearer $AUDIT_TOKEN" \
+    "http://127.0.0.1:18085/internal/audit/$path?limit=5" | jq .
+done
+```
+
+Expected: respons JSON berisi `items`/`checksum`/`locations`, tanpa `500` polos
+atau request yang menggantung.
+
+
 
 ---
 
@@ -1332,35 +1417,142 @@ at the deployed A/B canonical API to demonstrate actual canonical persistence.
 
 ---
 
-## 13. Milestone 2 - Problem 5: Sensor Pantai resilience
+## 13. Milestone 2 - Problem 5: Ketahanan Sensor Pantai
 
-P5 runs the supplied Sensor Pantai image and the same lease/epoch path as P2.
+Problem 5 menjalankan image Sensor Pantai yang disediakan dan memakai jalur
+lease/epoch yang sama dengan Problem 2.
 
-Components:
+Komponen:
 
-- `services/bnpb` sensor path — short timeouts, retries with full jitter and a retry budget, circuit breaker, progress-based health, cursor fallback, composite dedupe, last-known-good cache, critical outbox.
-- `services/ingest-pipeline` — C-owned durable DLQ/replay used for invalid sensor observations.
-- `services/field-notifier` — Tim Lapangan webhook receiver with dedupe and end-to-end latency metrics.
-- `services/client-api` — priority-aware admission control with reserved capacity for Tim Lapangan.
-- `deploy/sensor-pantai/` — supplied manifest, mandatory resources block, and exam overlay.
+- `services/bnpb` jalur sensor — timeout pendek, retry dengan full jitter dan retry budget, circuit breaker, health berbasis progres, fallback cursor, dedupe komposit, cache last-known-good, dan outbox peringatan kritis.
+- `services/ingest-pipeline` — DLQ/replay durabel milik C untuk observasi sensor yang tidak valid.
+- `services/field-notifier` — penerima webhook Tim Lapangan dengan dedupe dan metrik latensi end-to-end.
+- `services/client-api` — admission control berbasis prioritas dengan kapasitas khusus Tim Lapangan.
+- `deploy/sensor-pantai/` — manifest yang disediakan, blok resources wajib, dan overlay ujian.
 
-### Run locally
+### Jalankan secara lokal
 
-`make dev-up` already starts the real `sustuna/sensor-pantai` image with the
-practice profile. The sensor token comes from `PANTAI_AUTH_TOKEN`.
+`make dev-up` sudah menjalankan image asli `sustuna/sensor-pantai` dengan profil
+practice. Token sensor dibaca dari `PANTAI_AUTH_TOKEN`.
 
-### Exam overlay
+### Overlay ujian
 
 ```bash
 kubectl -n sistem-informasi-kebencanaan-bnpb apply -f pantai-key.secret.yaml
 kubectl kustomize deploy/sensor-pantai/overlays/exam | kubectl apply -f -
 ```
 
-### P5 tests
+### Pemeriksaan kriteria P5
+
+Jalankan di cluster demo. Biarkan port-forward berikut tetap berjalan:
 
 ```bash
-k6 run -e FIELD_VUS=4000 -e MEDIA_VUS=4000 loadtest/k6/priority.js
-./scripts/gameday.sh
-./scripts/sensor-discovery.sh practice 42
-curl -s http://aggregator:8085/sensor/status | jq
+kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/client-api 9080:8080 &
+kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/aggregator 18085:8085 &
+kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/field-notifier 18097:8080 &
+export BASE_URL=http://127.0.0.1:9080
+export INTERNAL_KEY='<INTERNAL_API_KEY dari bnpb-secrets>'
+export AUDIT_TOKEN='<AUDIT_TOKEN dari bnpb-secrets>'
 ```
+
+**Kriteria 1 — peringatan kritis, p95 ≤ 5 detik, nol hilang**
+
+```bash
+curl -s http://127.0.0.1:18097/stats | jq
+curl -s http://127.0.0.1:18097/metrics | grep critical_alert_pipeline_seconds
+curl -s http://127.0.0.1:18085/metrics \
+  | grep -E 'critical_outbox_enqueued_total|critical_outbox_delivered_total'
+```
+
+Expected: `duplicates` pada notifier hanya berasal dari retry, p95 pipeline di
+bawah 5 detik, dan jumlah delivered sama dengan enqueued.
+
+**Kriteria 2 — observasi tidak valid disisihkan, tidak disimpan**
+
+```bash
+curl -s -H "Authorization: Bearer $AUDIT_TOKEN" \
+  'http://127.0.0.1:18085/internal/audit/unprocessed?source=SENSOR_PANTAI&limit=100' | jq .
+curl -s http://127.0.0.1:18085/metrics | grep dlq_parked_total
+```
+
+Expected: setiap record tidak valid memiliki alasan (`schema`, `range`,
+`timestamp`, `unknown_station`, `quality`); tidak ada item cacat yang muncul
+sebagai baris kanonik.
+
+**Kriteria 3 — bulkhead untuk BMKG/PVMBG**
+
+```bash
+# Buat sensor bermasalah memakai knob pengujian yang disediakan.
+kubectl -n sistem-informasi-kebencanaan-bnpb set env deployment/sensor-pantai \
+  PANTAI_PROFILE=practice PANTAI_SEED=7
+
+# Ukur latensi baca khusus BMKG selama sensor bermasalah.
+for i in $(seq 1 200); do
+  curl -s -o /dev/null -w '%{time_total}\n' \
+    -H "X-Internal-Key: $INTERNAL_KEY" \
+    "$AGG_URL/hazards?source=BMKG&limit=50"
+done | sort -n | awk 'NR==190 { printf "p95=%.3fs\n", $1 }'
+```
+
+Expected: p95 di bawah 300 ms; jalur sensor tidak boleh memblokir BMKG/PVMBG.
+
+**Kriteria 4 — tidak ada lonjakan permintaan dan baca terdegradasi tetap cepat**
+
+```bash
+curl -s http://127.0.0.1:18085/sensor/status | jq
+curl -s http://127.0.0.1:18085/metrics \
+  | grep -E 'sensor_requests_total|sensor_seconds_since_last_fresh_observation|sensor_breaker_state'
+curl -s -D - -o /dev/null \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
+  'http://127.0.0.1:18085/hazards?source=SENSOR_PANTAI&limit=1'
+```
+
+Expected: breaker terbuka alih-alih jumlah request naik; `/hazards` menjawab
+cepat dengan `X-Data-Freshness: degraded`,
+`X-Source-SENSOR_PANTAI-Status: stale`, dan `Stale-Since`.
+
+**Kriteria 5 — Tim Lapangan dilayani, Media ditolak terkontrol**
+
+```bash
+k6 run -e BASE_URL="$BASE_URL" -e FIELD_VUS=4000 -e MEDIA_VUS=4000 loadtest/k6/priority.js
+kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/client-api 19080:8080 &
+curl -s http://127.0.0.1:19080/metrics | grep admission_rejected_total
+```
+
+Expected: permintaan Tim Lapangan tetap berhasil; Media menerima `429`
+terkontrol dengan `Retry-After`, tercatat pada `role="media"`.
+
+**Kriteria 6 — kombinasi kegagalan pulih sendiri**
+
+```bash
+./scripts/gameday.sh
+./scripts/gameday.sh kill-pod kill-node
+```
+
+Expected: takeover lease, probe breaker, fallback cursor, retry outbox, dan
+pemulihan cache basi terjadi tanpa intervensi manual.
+
+**Kriteria 7 — dashboard, metrik, dan jejak permintaan**
+
+```bash
+kubectl -n sistem-informasi-kebencanaan-bnpb get cm bnpb-grafana-dashboard
+kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/grafana 3000:3000
+# Buka dashboard BNPB M2; korelasikan request lewat trace_id/correlation ID di log.
+```
+
+Jika Grafana belum terpasang, nilai yang sama tersedia di
+`http://127.0.0.1:18085/metrics` dan `http://127.0.0.1:18097/metrics`.
+
+**Kriteria 8 — anggaran SLO**
+
+```bash
+kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/prometheus 19090:9090
+curl -sG http://127.0.0.1:19090/api/v1/query \
+  --data-urlencode 'query=histogram_quantile(0.95, sum(rate(critical_alert_pipeline_seconds_bucket[24h])) by (le))'
+```
+
+Anggaran: `used = jumlah event > 5 detik / (0,005 × jumlah event kritis pada
+window)`. Gunakan `critical_alert_pipeline_seconds_count` sebagai penyebut dan
+`critical_outbox_delivered_total` untuk memeriksa kehilangan event. Jika Service
+Prometheus belum terpasang, ambil metrik yang sama dari
+`http://127.0.0.1:18097/metrics` lalu hitung rasionya secara manual.
