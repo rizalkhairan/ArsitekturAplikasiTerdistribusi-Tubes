@@ -3,52 +3,53 @@ package canonical
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"sort"
+	"time"
 
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/database"
 )
 
-// These preserve the M1 read routes. Snapshot pagination, partial coverage and
-// the Audit API are A09/A10; a failed distributed query returns an error here.
+// List preserves M1's array shape, event-time filter and newest-first order.
+// Since arrays cannot express coverage, an incomplete traversal fails closed.
 func (s *Store) List(ctx context.Context, source, severity, since string, limit int) ([]Event, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 1000
 	}
-	query := `SELECT event FROM canonical.events WHERE operation='upsert'`
-	args := []any{}
-	for _, filter := range []struct{ column, value string }{{"source", source}, {"event->>'severity'", severity}, {"event->>'occurred_at'", since}} {
-		if filter.value != "" {
-			args = append(args, filter.value)
-			op := "="
-			if filter.column == "event->>'occurred_at'" {
-				filter.column = "(event->>'occurred_at')::timestamptz"
-				op = ">="
-			}
-			query += fmt.Sprintf(" AND %s %s $%d", filter.column, op, len(args))
+	var start time.Time
+	var err error
+	if since != "" {
+		start, err = time.Parse(time.RFC3339Nano, since)
+		if err != nil {
+			return nil, err
 		}
 	}
-	args = append(args, limit)
-	query += fmt.Sprintf(" ORDER BY (event->>'occurred_at')::timestamptz DESC,hazard_id LIMIT $%d", len(args))
-	rows, err := s.DB.QueryContext(ctx, query, args...)
+	events, missing, err := gather(ctx, s, Query{Source: source})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	events := []Event{}
-	for rows.Next() {
-		var raw []byte
-		var event Event
-		if err = rows.Scan(&raw); err != nil {
-			return nil, err
-		}
-		if err = json.Unmarshal(raw, &event); err != nil {
-			return nil, err
-		}
-		events = append(events, event)
+	if len(missing) > 0 {
+		return nil, storageError("coverage_unavailable", "legacy list cannot represent incomplete coverage")
 	}
-	return events, rows.Err()
+	selected := []Event{}
+	for _, e := range events {
+		if (severity == "" || e.Severity == severity) && !e.OccurredAt.Before(start) {
+			selected = append(selected, e)
+		}
+	}
+	sort.Slice(selected, func(i, j int) bool {
+		if selected[i].OccurredAt.Equal(selected[j].OccurredAt) {
+			return selected[i].HazardID < selected[j].HazardID
+		}
+		return selected[i].OccurredAt.After(selected[j].OccurredAt)
+	})
+	if len(selected) > limit {
+		selected = selected[:limit]
+	}
+	return selected, nil
 }
 func (s *Store) Get(ctx context.Context, id string) (Event, error) {
+	ctx, cancel := context.WithTimeout(ctx, readTimeout)
+	defer cancel()
 	var raw []byte
 	var event Event
 	err := s.DB.QueryRowContext(ctx, `SELECT event FROM canonical.events WHERE hazard_id=$1 AND operation='upsert'`, id).Scan(&raw)

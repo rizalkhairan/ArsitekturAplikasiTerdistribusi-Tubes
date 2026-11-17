@@ -173,8 +173,42 @@ C persists producer versions. Updates/retractions produce outbox messages with
 `event_id`, `version` and `operation`. Publication is at least once and orders
 pending changes per identity; consumers must reject duplicate/older versions
 and handle retractions. Existing `/hazards` reads retain internal authentication
-and fields; failed queries return 503. Snapshot pagination, partial reads,
-Audit and analytics remain subsequent work.
+and fields; incomplete lists return 503. The authenticated canonical query route
+adds snapshot pagination and explicit partial results; Audit and analytics remain
+subsequent work.
+
+### Canonical reads and cursors
+
+Deploy the updated Aggregator images and run the existing schema migration Job
+through the normal PostgreSQL deployment command. It adds a coordinator-local
+snapshot cache and a fixed, restricted shard-read helper; topology, credentials
+and required resources remain unchanged. Read using the existing internal key:
+
+```bash
+curl -H 'X-Internal-Key: <internal-read-key>' \
+  'http://<aggregator>/internal/canonical/events?source=SATELIT&limit=100'
+```
+
+Repeat source/since and supply the opaque `next_cursor` for following pages;
+limit may change. The [query contract](../contracts/m2/README.md#queries-and-audit-appendix-a)
+defines ingestion-time ordering, 300 s immutable snapshots, version/tombstone
+deduplication and per-shard visibility during concurrent writes. Four workers,
+400 ms per shard, 6 s gathering and 8 s requests bound storage waits. Per-shard
+10,000-row/4 MiB limits produce explicit missing units; a 16 MiB gather limit
+fails the request. Narrow source/since for large traversals. The shared cache
+holds at most 64 snapshots/256 MiB of item payloads, removes expired entries on
+new cache writes and returns 429 when full. Cache space must fit coordinator
+disk capacity.
+
+Check `partial` and `unavailable_units` on **every** page, including a null final
+cursor. Coverage stays frozen after shard recovery or movement; start a fresh
+traversal for recovered data. Unknown shard inventory fails with 503 rather than
+claiming completeness. Snapshot loss during coordinator promotion returns 503;
+expiry returns 400. Snapshots are disposable and acknowledged with local WAL,
+so these failures do not change A07/A08 event durability. Placement metadata
+locks can delay rebalance cutover briefly; normal canonical writes continue.
+Safe fencing/routing remains required. `/hazards` retains its existing key,
+array response and newest-first event ordering; incomplete lists fail with 503.
 
 ```bash
 make platform-check
@@ -185,9 +219,13 @@ make canonical-recovery-integration # SQL recovery + online rebalance + second l
 
 The integration runner removes only its own containers/network. It checks real
 Citus transactions, version/epoch races, receipts, outbox retries, M1 import,
-shard placement, WAL replay and rejection after standby loss. It does not run
+shard placement, WAL replay and rejection after standby loss. A09 checks cover
+snapshot replay across Aggregators, concurrent updates/retractions, duplicate
+copies, a locked shard, a frozen worker's 16 missing shards, and recovery without
+silently extending partial cursors. It does not run
 Patroni/Kubernetes. The recovery variant drains/re-enables a worker with concurrent
-canonical reads/writes, loses the simulated app host's two slots, verifies data,
+canonical reads/writes and scatter-gather traversals, loses the simulated app
+host's two slots, verifies data,
 clones both replicas onto empty disposable disks, restores synchronous writes,
 then loses the simulated store host's two slots and verifies the entire dataset
 again. Its promotions/routing changes are manual PostgreSQL/Citus operations.
@@ -207,7 +245,7 @@ version, tombstone, receipt and outbox entry again. Repair that worker afterward
 Disk erasure requires explicit authorization. Capture audit checksums through
 A10 when available, node placement, replication/replay evidence and request
 outcomes. Kind and SQL-only checks cannot satisfy this separate-kernel drill;
-A09 partial-result responses and A10 Audit integration remain dependencies.
+A09 live partial-result checks and A10 Audit integration remain dependencies.
 
 ## Container development
 

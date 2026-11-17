@@ -124,3 +124,74 @@ GRANT EXECUTE ON FUNCTION canonical.replication_ready() TO canonical_app;
 -- statement
 GRANT EXECUTE ON FUNCTION canonical.primaries_ready() TO canonical_app;
 -- statement
+
+-- Immutable query cache is local to the replicated coordinator, shared by all
+-- Aggregators. It is disposable: promotion may lose an asynchronously saved
+-- snapshot, in which case its cursor is explicitly rejected.
+CREATE TABLE IF NOT EXISTS canonical.read_snapshots (
+    id uuid PRIMARY KEY,
+    secret bytea NOT NULL,
+    filters jsonb NOT NULL,
+    items jsonb NOT NULL,
+    missing jsonb NOT NULL,
+    expires_at timestamptz NOT NULL
+);
+-- statement
+GRANT SELECT, INSERT, DELETE ON canonical.read_snapshots TO canonical_app;
+-- statement
+
+-- The application gets a fixed read operation, never arbitrary worker SQL or
+-- administrator credentials. Metadata SHARE locks prevent routing/placement
+-- cutover while one shard is being observed; ordinary event writes continue.
+CREATE OR REPLACE FUNCTION canonical.read_shard(wanted bigint, source_filter text, since_filter text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp SET lock_timeout = '250ms'
+SET statement_timeout = '350ms' SET citus.node_connection_timeout = '200ms'
+AS $$
+DECLARE
+    placement record;
+    response record;
+    command text;
+    payload jsonb;
+    combined jsonb := '[]'::jsonb;
+    copies integer := 0;
+BEGIN
+    LOCK TABLE pg_dist_shard, pg_dist_placement, pg_dist_node IN SHARE MODE;
+    IF NOT EXISTS (SELECT 1 FROM pg_dist_shard WHERE shardid=wanted
+                   AND logicalrelid='canonical.events'::regclass) THEN
+        RAISE EXCEPTION 'unknown event shard';
+    END IF;
+    command := format($cmd$
+      WITH records AS MATERIALIZED (
+        SELECT jsonb_build_object('version',version,'operation',operation,'event',event) AS value
+        FROM %s WHERE (%L='' OR source=%L)
+          AND (%L='' OR ingested_at >= NULLIF(%L,'')::timestamptz)
+        LIMIT 10001
+      ), bounds AS (SELECT count(*) AS n,coalesce(sum(octet_length(value::text)),0) AS bytes FROM records)
+      SELECT CASE WHEN pg_is_in_recovery() OR n>10000 OR bytes>4194304
+             THEN '{"unavailable":true}'::jsonb
+             ELSE (SELECT coalesce(jsonb_agg(value),'[]'::jsonb) FROM records) END FROM bounds
+    $cmd$, shard_name('canonical.events'::regclass,wanted),source_filter,source_filter,since_filter,since_filter);
+    FOR placement IN
+      SELECT n.nodename,n.nodeport FROM pg_dist_placement p JOIN pg_dist_node n USING(groupid)
+      WHERE p.shardid=wanted AND p.shardstate=1 AND n.noderole='primary' AND n.isactive
+      ORDER BY n.nodeid
+    LOOP
+      SELECT * INTO STRICT response FROM master_run_on_worker(
+        ARRAY[placement.nodename], ARRAY[placement.nodeport], ARRAY[command], false);
+      IF NOT response.success THEN RAISE EXCEPTION 'event shard unavailable'; END IF;
+      payload := response.result::jsonb;
+      IF jsonb_typeof(payload) <> 'array' THEN RAISE EXCEPTION 'event shard unavailable or over read budget'; END IF;
+      combined := combined || payload;
+      IF octet_length(combined::text)>4194304 THEN RAISE EXCEPTION 'event shard over read budget'; END IF;
+      copies := copies + 1;
+    END LOOP;
+    IF copies=0 THEN RAISE EXCEPTION 'no active primary placement'; END IF;
+    RETURN combined;
+END;
+$$;
+-- statement
+REVOKE ALL ON FUNCTION canonical.read_shard(bigint,text,text) FROM PUBLIC;
+-- statement
+GRANT EXECUTE ON FUNCTION canonical.read_shard(bigint,text,text) TO canonical_app;
+-- statement

@@ -88,11 +88,24 @@ def main():
                "CANONICAL_TEST_REPLICATION": "1"}
         print("Running SQL/version/fencing/outbox/import tests with three synchronous pairs", flush=True)
         subprocess.run(["go", "test", "-race", "-count=1", "-v", "./internal/canonical"], cwd=ROOT / "services/bnpb", env=env, check=True)
+        subprocess.run(["go", "test", "-race", "-count=1", "-v", "./internal/api"], cwd=ROOT / "services/bnpb", env=env, check=True)
         for i, primary in enumerate(primaries):
             lsn = sql(primary, "SELECT pg_current_wal_flush_lsn()")
             wait(lambda: sql(name + f"-g{i}s", f"SELECT pg_last_wal_replay_lsn() >= '{lsn}'::pg_lsn") == "t", "standby WAL replay")
         print("All three standbys replayed the tested commits", flush=True)
         print("Shard placements:", sql(primaries[0], "SELECT nodename,count(*) FROM citus_shards WHERE table_name='canonical.events'::regclass GROUP BY nodename ORDER BY nodename"), flush=True)
+        # A09: freeze a worker primary without changing routing; enumerate all
+        # 16 missing shards, then recover. Pause preserves disposable tmpfs data.
+        before_reads = sql(primaries[0], "SELECT md5(string_agg(event::text,E'\\n' ORDER BY event_key)) FROM canonical.events")
+        run("docker", "pause", primaries[1])
+        subprocess.run(["go", "test", "-count=1", "-v", "./internal/canonical", "-run", "^TestSQLUnavailableWorkerAndRecovery$"],
+            cwd=ROOT / "services/bnpb", env={**env, "CANONICAL_TEST_READ_OUTAGE": "unavailable"}, check=True)
+        run("docker", "unpause", primaries[1])
+        wait(lambda: sql(primaries[1], "SELECT 1") == "1", "read worker recovery")
+        if before_reads != sql(primaries[0], "SELECT md5(string_agg(event::text,E'\\n' ORDER BY event_key)) FROM canonical.events"):
+            raise RuntimeError("Read outage changed canonical events")
+        subprocess.run(["go", "test", "-count=1", "-v", "./internal/canonical", "-run", "^TestSQLUnavailableWorkerAndRecovery$"],
+            cwd=ROOT / "services/bnpb", env={**env, "CANONICAL_TEST_READ_OUTAGE": "recovered"}, check=True)
         if args.recovery:
             recovery(name, primaries, containers, sql, env)
         else:
@@ -147,6 +160,7 @@ def recovery(name, primaries, containers, sql, env):
             workload = subprocess.Popen(["go", "test", "-count=1", "-v", "./internal/canonical", "-run", "^TestOnlineRebalanceWorkload$"],
                 cwd=ROOT / "services/bnpb", env={**env, "CANONICAL_TEST_REBALANCE": "1",
                 "CANONICAL_TEST_WORKLOAD_STOP": str(stop), "CANONICAL_TEST_ONLINE_DURABILITY": durability}, stdout=subprocess.PIPE, text=True)
+            queries = None
             try:
                 deadline, ready = time.monotonic() + 30, False
                 while time.monotonic() < deadline and workload.poll() is None:
@@ -158,17 +172,39 @@ def recovery(name, primaries, containers, sql, env):
                             break
                 if not ready:
                     raise RuntimeError("Canonical workload did not start before the online operation")
+                queries = subprocess.Popen(["go", "test", "-count=1", "-v", "./internal/canonical", "-run", "^TestSQLOnlineQueryWorkload$"],
+                    cwd=ROOT / "services/bnpb", env={**env, "CANONICAL_TEST_QUERY_REBALANCE": "1",
+                    "CANONICAL_TEST_WORKLOAD_STOP": str(stop)}, stdout=subprocess.PIPE, text=True)
+                deadline, ready = time.monotonic() + 30, False
+                while time.monotonic() < deadline and queries.poll() is None:
+                    if select.select([queries.stdout], [], [], 1)[0]:
+                        line = queries.stdout.readline()
+                        print(line, end="", flush=True)
+                        if "A09_QUERY_READY" in line:
+                            ready = True
+                            break
+                if not ready:
+                    raise RuntimeError("Scatter-gather workload did not start before the online operation")
                 yield
                 stop.touch()
                 output, _ = workload.communicate(timeout=30)
                 print(output, end="", flush=True)
                 if workload.returncode != 0:
                     raise RuntimeError("Canonical reads/writes failed during the online operation")
+                output, _ = queries.communicate(timeout=30)
+                print(output, end="", flush=True)
+                if queries.returncode != 0:
+                    raise RuntimeError("Scatter-gather reads failed during the online operation")
             finally:
                 if workload.poll() is None:
                     workload.terminate()
                     workload.wait(timeout=10)
                 workload.stdout.close()
+                if queries is not None:
+                    if queries.poll() is None:
+                        queries.terminate()
+                        queries.wait(timeout=10)
+                    queries.stdout.close()
 
     def sync(group, enabled):
         value = "FIRST 1 (replica)" if enabled else ""

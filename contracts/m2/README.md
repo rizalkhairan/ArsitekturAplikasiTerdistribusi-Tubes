@@ -39,7 +39,7 @@ boundaries, not a new independently deployed canonical service.
 | Route | Implementation owner | Caller / credentials |
 | --- | --- | --- |
 | `PUT /internal/canonical/events/{source}/{source_ref_id}` | A, mounted by B | B/C service identities, write scope |
-| `GET /internal/canonical/events` | A, mounted by B | Internal read scope |
+| `GET /internal/canonical/events` | A, mounted by B | Existing `X-Internal-Key` read credential |
 | `GET /internal/audit/events` | A, mounted by B | Assistant audit Bearer token |
 | `GET /internal/audit/checksum` | A, mounted by B | Assistant audit Bearer token |
 | `GET /internal/audit/location` | A, mounted by B | Assistant audit Bearer token |
@@ -137,18 +137,59 @@ simulates serialized writes. It has no lease issuance or lease-expiry claim.
 
 ## Queries and Audit (Appendix A)
 
-`GET /internal/canonical/events` uses the same response and filters as audit events.
+`GET /internal/canonical/events` is implemented for the PostgreSQL backend with
+the existing internal read key (producer Bearer tokens grant no read access).
+It uses the following response and filters; Audit routes remain A10 work.
 `source` optional, `since` inclusive on **ingested_at**, `limit` defaults to 100,
 range 1–1000, `cursor` opaque. Sort ascending by `(ingested_at, hazard_id)`.
 Response: `{items, next_cursor, partial, unavailable_units}`; final cursor is null.
 
-Pagination decision: capture an immutable query snapshot on page one. Bind the
-cursor to source/since and coverage. Subsequent pages repeat source/since; limit
-may change. Snapshot TTL is 300 s; expired cursor returns 400 `cursor_expired`,
-requiring a fresh traversal. Never silently restart. Cursors are process-local in
-the stub; production must survive replica routing or explicitly reject unavailable
-snapshots. Updates during traversal appear on a fresh traversal. Partial snapshots
-retain their initial coverage; recovery requires starting again for complete data.
+Pagination captures immutable observations on page one. Subsequent pages repeat
+source/since (timestamps normalize to UTC); limit may change. Ordering compares
+timestamps as instants, then hazard IDs by UTF-8 bytes. Opaque MAC-protected
+cursors bind snapshot/offset/expiry; replay returns the same page for the same
+limit. PostgreSQL snapshots are shared across Aggregators for 300 s. Expiry
+returns 400 `cursor_expired`; a lost snapshot or unavailable coordinator returns
+503 `snapshot_unavailable`. Retry the same cursor for a temporary outage, or
+explicitly start again after snapshot loss/expiry. Never silently restart.
+
+Consistency is **per-shard statement visibility, then frozen traversal**, not a
+global transactional snapshot. An insert, update, retraction or window commit
+concurrent with gathering can be observed on some shards before others. Later
+pages retain the gathered fields and membership even after updates/retractions;
+a fresh traversal observes new versions. Deduplicate by exact source/ref pair,
+select highest version before filtering active records, and let its tombstone
+suppress older copies. Conflicting equal versions/immutable IDs fail with 503
+`inconsistent_copies`. Separate identities sharing a source_ref_id remain distinct.
+
+Coverage is all logical event hash shards, including empty shards. Read only
+active primary placements from Citus metadata, never speculative physical
+standbys or an unfinished rebalance target. Metadata locks protect each shard's
+placement/routing during its read; normal event writes continue. Verify the
+entire hash space before gathering and the same shard inventory afterward.
+Unknown/inconsistent inventory returns 503 `coverage_unavailable`/`coverage_changed`.
+Safe Patroni promotion/fencing remains an A07/A08 prerequisite; no split-brain
+or global read-after-write guarantee is added here.
+
+Four workers use 400 ms per shard, a 6 s gather budget and an 8 s request budget.
+Timeouts, missing placements, failed copies or a per-shard cap (10,000 rows or
+4 MiB, including tombstones) omit the **whole shard** and return 200 with
+`partial:true` and sorted `unavailable_units:["shard-<id>",...]`. All shards
+unavailable yields an empty partial response if inventory remains verifiable.
+Every page repeats the initial coverage, including the final page: null cursor
+means exhaustion of that snapshot's available rows, never proof of full coverage.
+Recovery requires a fresh traversal to include previously unavailable shards.
+Partial data is not necessarily a prefix of the complete global ordering.
+
+Gathering beyond 16 MiB returns 503 `snapshot_too_large`; narrow source/since.
+No truncated result claims completion. The shared cache admits at most 64
+snapshots/256 MiB; full cache returns 429 `snapshot_capacity`. Snapshot storage
+uses local WAL acknowledgements and may be lost on promotion; cursor failure is
+explicit. The stub remains process-local and simulates these semantics without
+storage/failover guarantees. `/hazards` keeps its array, event-time `since` and
+newest-first ordering (hazard ID breaks ties); incomplete lists return 503 since
+that legacy shape cannot describe missing coverage. Point reads return 404 only
+after a successful complete query; storage failure returns 503.
 
 `GET /internal/audit/checksum?source=...`: source optional; respond
 `{source, count, checksum, algorithm:"sha256", as_of, partial, unavailable_units}`.

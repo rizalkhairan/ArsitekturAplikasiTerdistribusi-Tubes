@@ -43,6 +43,7 @@ func newServer(addr string, db *sql.DB, store *canonical.Store, credentials map[
 	mux.HandleFunc("GET /hazards", s.handleListHazards)
 	mux.HandleFunc("GET /hazards/{id}", s.handleGetHazard)
 	if store != nil {
+		mux.HandleFunc("GET /internal/canonical/events", s.handleCanonicalEvents)
 		mux.Handle("/internal/canonical/", canonical.Handler(store, credentials))
 	}
 
@@ -66,12 +67,17 @@ func newServer(addr string, db *sql.DB, store *canonical.Store, credentials map[
 // internalAuth checks the shared secret for internal service-to-service calls.
 func (s *Server) internalAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" || (s.canonical != nil && (r.URL.Path == "/ready" || strings.HasPrefix(r.URL.Path, "/internal/canonical/"))) {
+		readRoute := r.URL.Path == "/internal/canonical/events"
+		if r.URL.Path == "/health" || (s.canonical != nil && (r.URL.Path == "/ready" || (strings.HasPrefix(r.URL.Path, "/internal/canonical/") && !readRoute))) {
 			next.ServeHTTP(w, r)
 			return
 		}
 		key := r.Header.Get("X-Internal-Key")
 		if key == "" || key != s.internalKey {
+			if s.canonical != nil && readRoute {
+				writeCanonicalError(w, &canonical.Error{Status: 401, Code: "unauthorized", Message: "valid internal read key required"})
+				return
+			}
 			writeError(w, http.StatusUnauthorized, "unauthorized: invalid internal key")
 			return
 		}
