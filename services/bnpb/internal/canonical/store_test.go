@@ -43,6 +43,99 @@ func TestRestrictedApplicationRole(t *testing.T) {
 	if _, err = db.Exec(`ALTER TABLE canonical.events ADD COLUMN forbidden text`); err == nil {
 		t.Fatal("application can alter canonical schema")
 	}
+	if _, err = db.Exec(`UPDATE canonical.recovery SET durability='single_copy' WHERE singleton`); err == nil {
+		t.Fatal("application can downgrade the acknowledgement policy")
+	}
+}
+
+func TestRecoveryPolicySerializesWithWriters(t *testing.T) {
+	s, _, _ := integration(t)
+	ctx := context.Background()
+	tx, _, err := s.begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	// Exercise the production lock even in SQL-only development tests.
+	if err = tx.QueryRowContext(ctx, `SELECT durability FROM canonical.recovery WHERE singleton FOR SHARE`).Scan(new(string)); err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Rollback()
+	if _, err = other.Exec(`SET LOCAL lock_timeout='100ms'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = other.Exec(`UPDATE canonical.recovery SET durability=durability WHERE singleton`); err == nil {
+		t.Fatal("policy update crossed an in-flight writer")
+	}
+}
+
+// The disposable runner invokes this before/after loss and empty-disk repair.
+func TestRecoveryDurability(t *testing.T) {
+	want := os.Getenv("CANONICAL_TEST_RECOVERY")
+	if want == "" {
+		t.Skip("isolated recovery scenario only")
+	}
+	s, p, a := integration(t)
+	ctx := context.Background()
+	ref := uuid.NewString()
+	m := mutation(a, 1)
+	for i := 0; i < 3; i++ {
+		r, err := s.Put(ctx, p, "SATELIT", ref, m)
+		if err != nil || r.Durability != want {
+			t.Fatalf("mutation/retry durability=%s want=%s: %v", r.Durability, want, err)
+		}
+	}
+	w := Window{Authority: a, WindowID: uuid.NewString(), Items: []WindowItem{{"SATELIT", ref, m}}}
+	for i := 0; i < 2; i++ {
+		r, err := s.Seal(ctx, p, w)
+		if err != nil || r.Durability != want {
+			t.Fatalf("receipt/retry durability=%s want=%s: %v", r.Durability, want, err)
+		}
+	}
+	m.Version, m.Operation, m.Event = 2, "retract", nil
+	if r, err := s.Put(ctx, p, "SATELIT", ref, m); err != nil || r.Durability != want {
+		t.Fatalf("retraction durability=%s want=%s: %v", r.Durability, want, err)
+	}
+}
+
+func TestOnlineRebalanceWorkload(t *testing.T) {
+	if os.Getenv("CANONICAL_TEST_REBALANCE") != "1" {
+		t.Skip("isolated online-rebalance scenario only")
+	}
+	s, p, a := integration(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	stop := os.Getenv("CANONICAL_TEST_WORKLOAD_STOP")
+	if stop == "" {
+		t.Fatal("runner must supply a workload stop file")
+	}
+	for i := 0; ; i++ {
+		if i >= 10 {
+			if _, err := os.Stat(stop); err == nil {
+				fmt.Printf("A08_WORKLOAD_COMPLETED operations=%d\n", i)
+				break
+			}
+		}
+		ref := uuid.NewString()
+		r, err := s.Put(ctx, p, "SATELIT", ref, mutation(a, 1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.Get(ctx, r.HazardID); err != nil {
+			t.Fatal(err)
+		}
+		if want := os.Getenv("CANONICAL_TEST_ONLINE_DURABILITY"); r.Durability != want {
+			t.Fatalf("online durability=%s want=%s", r.Durability, want)
+		}
+		if i == 0 {
+			fmt.Println("A08_WORKLOAD_READY")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func TestReplicationUnavailable(t *testing.T) {
@@ -72,7 +165,11 @@ func integration(t *testing.T) (*Store, Principal, Authority) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	schemaOnce.Do(func() { schemaError = Migrate(context.Background(), db) })
+	schemaOnce.Do(func() {
+		if os.Getenv("CANONICAL_TEST_SCHEMA_READY") != "1" {
+			schemaError = Migrate(context.Background(), db)
+		}
+	})
 	if schemaError != nil {
 		t.Fatal(schemaError)
 	}
@@ -196,7 +293,7 @@ func TestConcurrentRetriesAndCrossPartitionRace(t *testing.T) {
 func TestFenceInstallationSerializesWithCommit(t *testing.T) {
 	s, p, a := integration(t)
 	ctx := context.Background()
-	tx, err := s.begin(ctx)
+	tx, durability, err := s.begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +311,7 @@ func TestFenceInstallationSerializesWithCommit(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 	ref := uuid.NewString()
-	if _, err = s.mutate(ctx, tx, "SATELIT", ref, mutation(a, 1)); err != nil {
+	if _, err = s.mutate(ctx, tx, durability, "SATELIT", ref, mutation(a, 1)); err != nil {
 		t.Fatal(err)
 	}
 	if err = tx.Commit(); err != nil {

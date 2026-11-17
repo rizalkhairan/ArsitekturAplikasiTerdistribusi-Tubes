@@ -145,10 +145,21 @@ and detection timeouts. Streaming replication is asynchronous by default;
 strict synchronous mode can block writes without a standby. Single-copy
 commits cannot survive loss of the remaining copy before repair.
 
-The initial storage overlay uses strict synchronous mode and `remote_apply`;
-it rejects writes when any group's synchronous standby is absent. The degraded
-continuity/repair transitions above are intended recovery behavior, not yet
-implemented by that overlay. See [deployment details](../deploy/README.md#canonical-postgresql-storage).
+The storage overlay defaults to strict synchronous mode and `remote_apply`.
+An administrator can enter a persisted `single_copy` recovery policy after
+fencing a worker and safe Patroni promotion. Writers hold a shared policy-row
+lock through commit; downgrade waits for them before relaxing affected groups'
+strict setting. Repair verifies named cross-node copies and WAL replay, restores
+strict mode first, then restores `replicated` acknowledgements. Interrupted
+transitions stay conservative. These operations require live failure validation;
+see [deployment details](../deploy/README.md#canonical-postgresql-storage).
+
+Replacement membership reuses the same logical node and two empty slots;
+Patroni clones surviving groups without changing the six-instance topology.
+Capacity membership can drain/re-enable an existing worker group and use Citus
+background logical rebalancing. Replica repair rebuilds a whole PostgreSQL group
+copy; shard movement redistributes data among groups. Additional groups require
+an explicit architecture/resource review.
 
 Fence isolated/resumed database primaries and separately reject stale poller
 ownership. Validate clock skew, freeze/resume, partitions and disk loss.

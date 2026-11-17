@@ -4,6 +4,19 @@ CREATE SCHEMA IF NOT EXISTS canonical;
 -- statement
 SET search_path = canonical, public;
 -- statement
+-- Recovery changes this row under an exclusive lock. Every writer holds a
+-- shared row lock until COMMIT, so the acknowledgement policy cannot race a
+-- change to Patroni's strict synchronous setting. Only administrators update it.
+CREATE TABLE IF NOT EXISTS recovery (
+    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    durability text NOT NULL CHECK (durability IN ('replicated', 'single_copy')),
+    fenced_node text,
+    changed_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+-- statement
+INSERT INTO recovery(singleton, durability) VALUES (true, 'replicated')
+ON CONFLICT DO NOTHING;
+-- statement
 SET citus.shard_count = 48;
 -- statement
 SET citus.shard_replication_factor = 1;
@@ -85,11 +98,29 @@ $$;
 -- statement
 REVOKE ALL ON FUNCTION canonical.replication_ready() FROM PUBLIC;
 -- statement
+CREATE OR REPLACE FUNCTION canonical.primaries_ready() RETURNS boolean
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+  SELECT count(*) = 3 AND bool_and(success AND result = 't')
+  FROM pg_catalog.run_command_on_all_nodes($probe$
+    SELECT NOT pg_is_in_recovery()
+  $probe$);
+$$;
+-- statement
+REVOKE ALL ON FUNCTION canonical.primaries_ready() FROM PUBLIC;
+-- statement
 REVOKE ALL ON SCHEMA canonical FROM PUBLIC;
 -- statement
 GRANT USAGE ON SCHEMA canonical TO canonical_app;
 -- statement
 GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA canonical TO canonical_app;
 -- statement
+REVOKE INSERT, UPDATE ON canonical.recovery FROM canonical_app;
+-- statement
+-- SELECT FOR SHARE requires UPDATE on at least one column. Granting the
+-- immutable key alone lets writers lock the row, without changing the policy.
+GRANT UPDATE(singleton) ON canonical.recovery TO canonical_app;
+-- statement
 GRANT EXECUTE ON FUNCTION canonical.replication_ready() TO canonical_app;
+-- statement
+GRANT EXECUTE ON FUNCTION canonical.primaries_ready() TO canonical_app;
 -- statement

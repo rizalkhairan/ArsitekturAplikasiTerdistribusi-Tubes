@@ -133,3 +133,11 @@ canonical-test:
 
 canonical-integration:
 	$(PYTHON) deploy/k3s/canonical_smoke.py
+
+.PHONY: canonical-recovery canonical-recovery-integration
+# Example: make canonical-recovery RECOVERY_ACTION=status SECURITY_PROFILE=--dev
+canonical-recovery:
+	$(PYTHON) deploy/k3s/recovery.py $(or $(RECOVERY_ACTION),status) $(SECURITY_PROFILE) $(RECOVERY_ARGS)
+
+canonical-recovery-integration:
+	$(PYTHON) deploy/k3s/canonical_smoke.py --recovery

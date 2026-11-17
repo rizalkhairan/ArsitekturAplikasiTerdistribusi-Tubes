@@ -63,7 +63,7 @@ func (s *Store) Get(ctx context.Context, id string) (Event, error) {
 // sweep. Broker acknowledgement precedes the replicated publication marker.
 // A crash can repeat a send; consumers must deduplicate event_id/version.
 func (s *Store) Publish(ctx context.Context, send func(context.Context, database.OutboxEvent) error) error {
-	tx, err := s.begin(ctx)
+	tx, _, err := s.begin(ctx)
 	if err != nil {
 		return err
 	}

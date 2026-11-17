@@ -52,13 +52,107 @@ routing; `postgres-role` preserves `role=store`. Explicit projected API tokens
 and namespace-scoped Patroni RBAC coexist with private PVC/Secret admission and
 database ingress restrictions.
 
-The initial policy requires all three synchronous standbys, strict synchronous
+The default policy requires all three synchronous standbys, strict synchronous
 Patroni mode and `synchronous_commit=remote_apply`. Successful mutations return
 `durability: replicated`; retries force fresh WAL before acknowledgement to
-cover uncertain prior commits. A missing standby returns 503. Single-copy
-availability, safe promotion, repair and membership changes remain recovery
-work; do not disable strict mode to claim that behavior. Database primary
-fencing under freeze/partition still needs live failure tests.
+cover uncertain prior commits. A missing standby returns 503 until an explicit
+fenced recovery transition. Database primary fencing under freeze/partition
+still needs live failure tests.
+
+### Recovery and membership
+
+Rebuild/deploy the A08 images and run the schema migration through the usual
+PostgreSQL deployment command before using recovery commands. Preserve existing
+credentials, DCS records, PVs and PVCs. The new image has a distinct tag to avoid
+reusing the cached A07 image. `bootstrap.dcs` settings do not change an existing
+formation: run `configure` below to apply logical WAL/slot/sender settings and
+the 10-second primary restart grace. Inspect Patroni `pending_restart`; if needed,
+restart each standby, wait for replication, switch over, then restart the former
+primary. Keep strict replication enabled throughout this upgrade.
+
+```bash
+make canonical-check SECURITY_PROFILE=--dev         # A07 placement/SQL baseline
+make canonical-recovery RECOVERY_ACTION=check SECURITY_PROFILE=--dev
+make canonical-recovery RECOVERY_ACTION=configure SECURITY_PROFILE=--dev
+make canonical-recovery RECOVERY_ACTION=status SECURITY_PROFILE=--dev
+```
+
+Omit `SECURITY_PROFILE=--dev` for the separate-kernel deployment. Recovery uses
+the existing store's administrative identity; no new application credential,
+PVC owner, privileged workload or API route is introduced. `check` additionally
+verifies actual Patroni leadership, safe election settings, routing, synchronous
+member names, distinct hosting nodes, disk identity and WAL replay barriers.
+
+Patroni automatically elects only an eligible synchronous copy and updates Citus
+routing. Recovery tooling never calls manual `/failover`. Before permitting
+single-copy writes, **power off or fence the failed worker** and retain the
+control plane. Kubernetes NotReady and failed pings are insufficient fencing.
+Supply a trusted local executable that accepts a node name and exits zero only
+when authoritative power/network isolation confirms that specific node cannot
+run its old primary. It must check the fence, not merely issue a shutdown request.
+In development, omit `--fence-check`: the tool verifies that the named worker
+belongs to the dedicated kind cluster and its container is fully stopped.
+
+```bash
+make canonical-recovery RECOVERY_ACTION=degrade SECURITY_PROFILE=--dev \
+  RECOVERY_ARGS='--node WORKER_NAME --fence-check /absolute/path/to/check-fence'
+```
+
+Wait for safe Patroni promotion before `degrade`; rerun if elections/routing
+have not converged. The operation first records `single_copy` under a database
+row lock that waits for in-flight writers, then relaxes strict mode only in the
+two affected groups. Synchronous mode, timeline checks, zero promotion lag and
+`remote_apply` remain enabled. Requests may return bounded 503s during election
+or policy convergence. Successful mutations and window receipts explicitly say
+`durability: single_copy`, including retries. This conservatively describes the
+whole formation even when one transaction reaches a replicated group. Loss of
+the remaining copy before repair can lose these degraded commits. The tool
+refuses degradation for a second node until the first has been repaired.
+
+An empty replacement uses the original logical node name/address and the same
+two declared slots; provision it using the existing-machines workflow. Retain
+control-plane DCS/PVC objects and credentials, create the new private local
+directories with the normal provisioning command, and leave surviving disks
+alone. This is replacement membership within the documented three-node topology,
+not a fourth PostgreSQL group. Patroni clones empty slots from their surviving
+primaries and rewinds eligible returning former primaries. It does not rebuild
+a surviving primary from an empty replacement. If rewind cannot recover an
+existing disk, inspect it first; these commands never erase/reinitialize it.
+
+```bash
+make canonical-recovery RECOVERY_ACTION=repair SECURITY_PROFILE=--dev
+make canonical-check SECURITY_PROFILE=--dev
+make canonical-recovery RECOVERY_ACTION=check SECURITY_PROFILE=--dev
+```
+
+`repair` retries for up to 180 seconds (`RECOVERY_ARGS='--timeout 600'` for a
+larger copy). It requires all three named replicas to stream synchronously on
+distinct nodes, match the primary's database system identifier and replay a
+captured flush LSN. It then restores strict mode in every group, verifies again,
+and commits `replicated` through synchronous WAL. An interrupted transition stays
+conservatively `single_copy`; rerun it. A healthy pod alone is insufficient.
+No cluster recreation, PVC deletion or data deletion is part of these commands.
+
+Capacity membership and rebalancing are separate from physical replica repair.
+`drain`/`enable` change `shouldhaveshards` on an existing worker group; group 0
+and all three replication groups remain registered. Inspect the plan, start the
+background logical transfer, then monitor status until finished. Events and
+outbox shards move together. All distributed tables have primary keys; `auto`
+logical transfer and `wal_level=logical` avoid a blocking COPY fallback.
+
+```bash
+make canonical-recovery RECOVERY_ACTION=drain RECOVERY_ARGS='--group 2' SECURITY_PROFILE=--dev
+make canonical-recovery RECOVERY_ACTION=plan SECURITY_PROFILE=--dev
+make canonical-recovery RECOVERY_ACTION=rebalance SECURITY_PROFILE=--dev
+make canonical-recovery RECOVERY_ACTION=status SECURITY_PROFILE=--dev
+# After the drain finishes, restore capacity and run plan/rebalance/status again:
+make canonical-recovery RECOVERY_ACTION=enable RECOVERY_ARGS='--group 2' SECURITY_PROFILE=--dev
+```
+
+Membership/rebalancing requires repaired strict replication, logical WAL and no
+active rebalance. Return all groups to shard-bearing membership before final
+distribution measurements. Expansion beyond three groups requires an explicit
+topology/resource/admission design; this overlay does not silently add capacity.
 
 The [canonical contract](../contracts/m2/README.md) defines authenticated event
 PUTs, versions and retractions. Two implemented handoff routes need B/C review:
@@ -86,17 +180,34 @@ Audit and analytics remain subsequent work.
 make platform-check
 make canonical-test           # SQL tests skip unless CANONICAL_TEST_DSN is set
 make canonical-integration    # Disposable Docker: 3 primaries + 3 standbys
+make canonical-recovery-integration # SQL recovery + online rebalance + second loss
 ```
 
 The integration runner removes only its own containers/network. It checks real
 Citus transactions, version/epoch races, receipts, outbox retries, M1 import,
 shard placement, WAL replay and rejection after standby loss. It does not run
-Patroni/Kubernetes. These checks do not prove separate-kernel durability,
+Patroni/Kubernetes. The recovery variant drains/re-enables a worker with concurrent
+canonical reads/writes, loses the simulated app host's two slots, verifies data,
+clones both replicas onto empty disposable disks, restores synchronous writes,
+then loses the simulated store host's two slots and verifies the entire dataset
+again. Its promotions/routing changes are manual PostgreSQL/Citus operations.
+These checks do not prove separate-kernel durability,
 promotion, partition safety, live policy enforcement or B/C end-to-end ingest.
 Use `canonical-check` for live placement/replication readiness before collecting
 failure evidence. Configuration follows the official
 [Patroni Citus integration](https://patroni.readthedocs.io/en/latest/citus.html)
 and [replication guidance](https://patroni.readthedocs.io/en/latest/replication_modes.html).
+
+Live acceptance remains a separate drill: establish both baseline checks; seed
+canonical traffic and retain its acknowledged IDs/versions/checksum; fence one
+worker and verify safe automatic promotion, bounded responses and degraded
+writes; join an empty replacement while traffic continues; complete `repair`;
+then fence the **other** worker and verify every previously acknowledged event,
+version, tombstone, receipt and outbox entry again. Repair that worker afterward.
+Disk erasure requires explicit authorization. Capture audit checksums through
+A10 when available, node placement, replication/replay evidence and request
+outcomes. Kind and SQL-only checks cannot satisfy this separate-kernel drill;
+A09 partial-result responses and A10 Audit integration remain dependencies.
 
 ## Container development
 

@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 import manage
 
-IMAGE = "bnpb.local/canonical:pg16-citus13.0.1-patroni4.1.5"
+IMAGE = "bnpb.local/canonical:pg16-citus13.0.1-patroni4.1.5-a08"
 PAIRS = {"a": ("node-control", "node-app"), "b": ("node-app", "node-store"),
          "c": ("node-store", "node-control")}
 ACCOUNTS = [f"canonical-{group}-{slot}" for group in PAIRS for slot in ("primary", "replica")]

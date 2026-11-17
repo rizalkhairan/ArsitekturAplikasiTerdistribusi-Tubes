@@ -85,7 +85,11 @@ are outside this v1 path contract. The body is the envelope in `write-example.js
 - `correlation_id`: nonempty identifier forwarded to logs/traces/outbox.
 
 201 on first mutation; 200 on update, retract, or identical retry. Response:
-`{hazard_id, version, operation, replayed, durability}`. A higher version wins;
+`{hazard_id, version, operation, replayed, durability}`. Production durability is
+`replicated` under strict synchronous replication, or explicitly `single_copy`
+during administrator-controlled fenced recovery. The latter cannot tolerate
+loss of the remaining copy before repair. Window receipts use the same policy;
+retries report the current transaction's durability. A higher version wins;
 lower version returns 409 `stale_version`; reuse of a version with different
 operation/event returns 409 `version_conflict`. Retry equivalence excludes
 correlation ID and authority so a new legitimate lease owner can retry the same

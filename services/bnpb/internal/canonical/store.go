@@ -42,8 +42,8 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 type Store struct {
 	DB    *sql.DB
 	Topic string
-	// Production always requires replication. Tests can explicitly exercise SQL
-	// semantics on an isolated database; those responses say unreplicated_test.
+	// Production enforces the administrator-controlled recovery policy. Tests
+	// can exercise SQL alone; those responses say unreplicated_test.
 	RequireReplication bool
 }
 
@@ -61,39 +61,45 @@ func Open(ctx context.Context, dsn, topic string) (*Store, error) {
 	}
 	return &Store{DB: db, Topic: topic, RequireReplication: true}, nil
 }
-func (s *Store) durability() string {
-	if s.RequireReplication {
-		return "replicated"
-	}
-	return "unreplicated_test"
-}
-func (s *Store) begin(ctx context.Context) (*sql.Tx, error) {
+
+// The returned policy belongs to this transaction, never mutable Store state.
+func (s *Store) begin(ctx context.Context) (*sql.Tx, string, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	// Citus 13 always uses 2PC for multi-shard writes; its former protocol GUC
-	// no longer exists. Worker defaults also require remote_apply.
 	_, err = tx.ExecContext(ctx, `SET LOCAL synchronous_commit = 'remote_apply'; SET LOCAL statement_timeout = '8s'; SET LOCAL lock_timeout = '3s'`)
+	durability := "unreplicated_test"
 	if err == nil && s.RequireReplication {
-		var ready bool
-		err = tx.QueryRowContext(ctx, `SELECT canonical.replication_ready()`).Scan(&ready)
-		if err == nil && !ready {
-			err = &Error{503, "replication_unavailable", "all three groups require a synchronous standby"}
+		err = tx.QueryRowContext(ctx, `SELECT durability FROM canonical.recovery WHERE singleton FOR SHARE`).Scan(&durability)
+		if err == nil {
+			var ready bool
+			query := `SELECT canonical.replication_ready()`
+			if durability == "single_copy" {
+				query = `SELECT canonical.primaries_ready()`
+			} else if durability != "replicated" {
+				err = fmt.Errorf("unknown canonical durability policy")
+			}
+			if err == nil {
+				err = tx.QueryRowContext(ctx, query).Scan(&ready)
+				if err == nil && !ready {
+					err = &Error{503, "replication_unavailable", "storage groups are not ready under the recovery policy"}
+				}
+			}
 		}
 	}
 	if err != nil {
 		tx.Rollback()
-		return nil, err
+		return nil, "", err
 	}
-	return tx, nil
+	return tx, durability, nil
 }
 
 func (s *Store) InstallLease(ctx context.Context, lease Lease) error {
 	if lease.Partition == "" || lease.Owner == "" || lease.Epoch < 1 || lease.ExpiresAt.IsZero() {
 		return invalid("partition, owner, epoch and expires_at required")
 	}
-	tx, err := s.begin(ctx)
+	tx, _, err := s.begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -143,7 +149,7 @@ func (s *Store) Put(ctx context.Context, p Principal, source, ref string, m Muta
 	if err := m.validate(p, source, ref); err != nil {
 		return Result{}, err
 	}
-	tx, err := s.begin(ctx)
+	tx, durability, err := s.begin(ctx)
 	if err != nil {
 		return Result{}, err
 	}
@@ -151,7 +157,7 @@ func (s *Store) Put(ctx context.Context, p Principal, source, ref string, m Muta
 	if err = lockAuthority(ctx, tx, p, m.Authority); err != nil {
 		return Result{}, err
 	}
-	result, err := s.mutate(ctx, tx, source, ref, m)
+	result, err := s.mutate(ctx, tx, durability, source, ref, m)
 	if err != nil {
 		return Result{}, err
 	}
@@ -161,7 +167,7 @@ func (s *Store) Put(ctx context.Context, p Principal, source, ref string, m Muta
 	return result, nil
 }
 
-func (s *Store) mutate(ctx context.Context, tx *sql.Tx, source, ref string, m Mutation) (Result, error) {
+func (s *Store) mutate(ctx context.Context, tx *sql.Tx, durability, source, ref string, m Mutation) (Result, error) {
 	key, digest := Key(source, ref), m.digest()
 	// This coordinator lock also covers the first insert when there is no row
 	// to lock yet, including competing partition assignments for one identity.
@@ -195,7 +201,7 @@ func (s *Store) mutate(ctx context.Context, tx *sql.Tx, source, ref string, m Mu
 			// A timed-out COMMIT may be visible before its standby flush. Force
 			// another WAL record on this shard before acknowledging any replay.
 			_, err = tx.ExecContext(ctx, `UPDATE canonical.events SET confirmed_at=statement_timestamp() WHERE event_key=$1`, key)
-			return Result{event.HazardID, m.Version, m.Operation, true, s.durability(), false}, err
+			return Result{event.HazardID, m.Version, m.Operation, true, durability, false}, err
 		}
 	} else {
 		id, err := uuid.NewV7()
@@ -241,7 +247,7 @@ func (s *Store) mutate(ctx context.Context, tx *sql.Tx, source, ref string, m Mu
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{event.HazardID, m.Version, m.Operation, false, s.durability(), created}, nil
+	return Result{event.HazardID, m.Version, m.Operation, false, durability, created}, nil
 }
 
 type WindowItem struct {
@@ -280,7 +286,7 @@ func (s *Store) Seal(ctx context.Context, p Principal, w Window) (Receipt, error
 		digests = append(digests, hash([]any{item.Source, item.SourceRefID, item.Mutation.Version, item.Mutation.digest()}))
 	}
 	digest := hash([]any{w.PreviousCursor, w.NextCursor, digests})
-	tx, err := s.begin(ctx)
+	tx, durability, err := s.begin(ctx)
 	if err != nil {
 		return Receipt{}, err
 	}
@@ -320,11 +326,11 @@ func (s *Store) Seal(ctx context.Context, p Principal, w Window) (Receipt, error
 				continue
 			}
 		}
-		if _, err = s.mutate(ctx, tx, item.Source, item.SourceRefID, item.Mutation); err != nil {
+		if _, err = s.mutate(ctx, tx, durability, item.Source, item.SourceRefID, item.Mutation); err != nil {
 			return Receipt{}, err
 		}
 	}
-	r := Receipt{hash([]any{w.Authority.Partition, w.WindowID, digest, w.Authority.Epoch}), w.Authority.Epoch, s.durability()}
+	r := Receipt{hash([]any{w.Authority.Partition, w.WindowID, digest, w.Authority.Epoch}), w.Authority.Epoch, durability}
 	_, err = tx.ExecContext(ctx, `INSERT INTO canonical.windows(partition,window_id,digest,epoch,receipt) VALUES($1,$2,$3,$4,$5)
 	 ON CONFLICT(partition,window_id) DO UPDATE SET epoch=excluded.epoch,receipt=excluded.receipt`, w.Authority.Partition, w.WindowID, digest, w.Authority.Epoch, r.Receipt)
 	if err != nil {

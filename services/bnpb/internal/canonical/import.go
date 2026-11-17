@@ -32,7 +32,7 @@ func (s *Store) ImportM1(ctx context.Context, path string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	tx, err := s.begin(ctx)
+	tx, _, err := s.begin(ctx)
 	if err != nil {
 		return 0, err
 	}
