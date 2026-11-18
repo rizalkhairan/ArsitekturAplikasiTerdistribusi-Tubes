@@ -2,7 +2,7 @@ FROM golang:1.26-alpine AS builder
 
 WORKDIR /src/services/client-api
 COPY libs/observability/go.mod /src/libs/observability/
-COPY go.mod go.sum ./
+COPY services/client-api/go.mod services/client-api/go.sum ./
 RUN go mod download
 
 COPY libs/observability /src/libs/observability

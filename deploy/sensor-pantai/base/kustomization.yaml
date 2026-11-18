@@ -5,3 +5,4 @@ kind: Kustomization
 # two in sync with scripts/check-sensor-base.sh.
 resources:
   - deployment.yaml
+  - service.yaml

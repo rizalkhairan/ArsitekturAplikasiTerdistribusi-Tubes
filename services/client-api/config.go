@@ -13,6 +13,7 @@ type config struct {
 	Port               string
 	BNPBURL            string
 	UpstreamTimeout    time.Duration
+	UpstreamRetries    int
 	MaxConcurrent      int
 	ReservedConcurrent int
 	BNPBInternalKey    string
@@ -34,6 +35,7 @@ func loadConfig() config {
 		Port:               env("PORT", "8080"),
 		BNPBURL:            env("BNPB_API_URL", "http://bnpb:8085"),
 		UpstreamTimeout:    envDuration("UPSTREAM_TIMEOUT", 5*time.Second),
+		UpstreamRetries:    envInt("UPSTREAM_RETRIES", 8),
 		MaxConcurrent:      envInt("MAX_CONCURRENT_REQUESTS", 100),
 		ReservedConcurrent: envInt("RESERVED_FIELD_CAPACITY", 40),
 		BNPBInternalKey:    os.Getenv("BNPB_INTERNAL_KEY"),

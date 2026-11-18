@@ -1,29 +1,64 @@
 #!/usr/bin/env bash
-# Integration test for P2 criteria 3/5: pause a leader (SIGSTOP), verify takeover
-# and fencing when it resumes, then kill it and verify no duplicates/gaps.
+# P2 criterion 3: remove the active Aggregator leader and verify that another
+# replica takes over within the lease bound while exactly-once deduplication
+# still holds.
+#
+# This script deliberately deletes the leader Pod, which is valid on kind and
+# on a real cluster. P2 criterion 5 (VM/process freeze) must be driven by the
+# course Tester Agent on real VMs; the previous SIGSTOP-on-PID-1 attempt did not
+# freeze the process because PID 1 ignores default-action signals.
 set -euo pipefail
 
 NS="${NAMESPACE:-sistem-informasi-kebencanaan-bnpb}"
 OUT="${OUT:-loadtest/results}"
 mkdir -p "$OUT"
 
-leader="$(kubectl -n "$NS" get pods -l app=aggregator -o jsonpath='{.items[0].metadata.name}')"
-echo "[test] pausing leader $leader"
-kubectl -n "$NS" exec "$leader" -- kill -STOP 1 || {
-  echo "SIGSTOP failed; use the Tester Agent freeze practice instead" >&2
-  exit 1
+leader_pod() {
+  local pod
+  for pod in $(kubectl -n "$NS" get pods -l app=aggregator \
+    -o jsonpath='{.items[*].metadata.name}'); do
+    if kubectl -n "$NS" exec "$pod" -- \
+      wget -qO- http://127.0.0.1:8085/metrics 2>/dev/null \
+      | grep -Eq 'lease_holder\{[^}]*\} 1'; then
+      echo "$pod"
+      return 0
+    fi
+  done
+  return 1
 }
-echo "[test] waiting 25s (TTL=15s) for takeover"
-sleep 25
-kubectl -n "$NS" logs deploy/aggregator --tail=50 | grep -E 'lease_acquired|lease_renew_failed_self_fencing' | tail -n 5 || true
-./loadtest/duplicate-detector.sh | tee "$OUT/pause-while-frozen.txt"
-echo "[test] resuming $leader; it must not persist until it refreshes status"
-kubectl -n "$NS" exec "$leader" -- kill -CONT 1 || true
-sleep 5
-kubectl -n "$NS" logs "$leader" --tail=50 | grep -E 'fenced|stale|lease_renew_failed' || true
 
-echo "[test] killing $leader"
+leader="$(leader_pod || true)"
+if [ -z "$leader" ]; then
+  echo "[test] no leader found through aggregator metrics" >&2
+  exit 1
+fi
+
+echo "[test] deleting leader $leader"
 kubectl -n "$NS" delete pod "$leader" --wait=false
-sleep 20
+
+new_leader=""
+for _ in $(seq 1 40); do
+  sleep 1
+  candidate="$(leader_pod || true)"
+  if [ -n "$candidate" ] && [ "$candidate" != "$leader" ]; then
+    new_leader="$candidate"
+    break
+  fi
+done
+
+if [ -z "$new_leader" ]; then
+  echo "[test] no replacement leader acquired within 40s" >&2
+  kubectl -n "$NS" get pods -l app=aggregator -o wide | tee "$OUT/pause-pods.txt"
+  exit 1
+fi
+
+echo "[test] new leader $new_leader"
 kubectl -n "$NS" get pods -l app=aggregator -o wide | tee "$OUT/pause-pods.txt"
+for pod in $(kubectl -n "$NS" get pods -l app=aggregator \
+  -o jsonpath='{.items[*].metadata.name}'); do
+  kubectl -n "$NS" exec "$pod" -- \
+    wget -qO- http://127.0.0.1:8085/metrics 2>/dev/null \
+    | grep -E 'lease_holder\{|lease_epoch\{' || true
+done | tee "$OUT/pause-lease-metrics.txt"
+
 ./loadtest/duplicate-detector.sh | tee "$OUT/pause-after-kill.txt"

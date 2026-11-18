@@ -34,9 +34,14 @@ func New(baseURL, token, instance string, timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
+	transport := &http.Transport{
+		MaxIdleConns:        512,
+		MaxIdleConnsPerHost: 256,
+		IdleConnTimeout:     90 * time.Second,
+	}
 	return &Client{
 		base: strings.TrimRight(baseURL, "/"), token: token, instance: instance,
-		http: &http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error {
+		http: &http.Client{Timeout: timeout, Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}},
 	}

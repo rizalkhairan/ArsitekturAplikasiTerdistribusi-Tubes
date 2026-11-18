@@ -10,12 +10,17 @@ import { Counter, Rate } from 'k6/metrics';
 // else counts against the <1% error criterion.
 
 const BASE = __ENV.BASE_URL || 'http://client-api:8080';
-const USER = __ENV.USERNAME || 'field-user';
-const PASS = __ENV.PASSWORD || 'field-pass-2026';
+const USER = __ENV.K6_USER || 'field-user';
+const PASS = __ENV.K6_PASSWORD || 'field-pass-2026';
 const INTERNAL_KEY = __ENV.INTERNAL_KEY || '';
 
 const controlled = new Counter('controlled_rejections');
 const unexpected = new Counter('unexpected_errors');
+const unexpectedStatus = new Counter('unexpected_status');
+const unexpectedNetwork = new Counter('unexpected_network');
+const unexpectedHTTP = new Counter('unexpected_http');
+const unexpected4xx = new Counter('unexpected_4xx');
+const unexpected5xx = new Counter('unexpected_5xx');
 const errorRate = new Rate('error_rate_excl_controlled');
 
 export const options = {
@@ -66,6 +71,17 @@ export default function (data) {
     errorRate.add(false); // controlled rejection, not an error
   } else {
     unexpected.add(1);
+    unexpectedStatus.add(1, { status: String(res.status) });
+    if (res.status === 0) {
+      unexpectedNetwork.add(1);
+    } else {
+      unexpectedHTTP.add(1);
+      if (res.status >= 400 && res.status < 500) {
+        unexpected4xx.add(1);
+      } else if (res.status >= 500) {
+        unexpected5xx.add(1);
+      }
+    }
     errorRate.add(true);
   }
 

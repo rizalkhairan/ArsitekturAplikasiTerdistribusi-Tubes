@@ -47,6 +47,7 @@ type Server struct {
 	outer          func(http.Handler) http.Handler
 	ready          func() bool
 	cacheMu        sync.Mutex
+	refreshMu      sync.Mutex
 	listCache      map[string]listCacheEntry
 	cacheTTL       time.Duration
 }
@@ -181,7 +182,34 @@ func (s *Server) listEvents(ctx context.Context, source, severity, since string,
 	}
 	s.cacheMu.Unlock()
 
+	// Serialize cache refreshes. Without this, every request that arrives just
+	// after expiry calls the shared store at once, which can exhaust its read
+	// path and turn a cache miss into a 503. Waiters re-check the cache after
+	// the first refresh completes.
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+
+	now = time.Now()
+	s.cacheMu.Lock()
+	if entry, ok := s.listCache[key]; ok && now.Before(entry.expires) {
+		events := entry.events
+		s.cacheMu.Unlock()
+		return events, nil
+	}
+	s.cacheMu.Unlock()
+
 	events, err := s.store.List(ctx, source, since, limit)
+	if err != nil {
+		// During a store or endpoint transition, serving the last-known-good
+		// response is better than turning a short read outage into a 5xx.
+		// The freshness headers still expose the source status.
+		s.cacheMu.Lock()
+		if entry, ok := s.listCache[key]; ok {
+			events = entry.events
+			err = nil
+		}
+		s.cacheMu.Unlock()
+	}
 	if err != nil {
 		return nil, err
 	}

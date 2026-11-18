@@ -8,10 +8,18 @@ BASE="${BASE_URL:-http://client-api:8080}"
 OUT="${OUT:-loadtest/results}"
 VUS="${VUS:-2000}"
 DURATION="${DURATION:-60s}"
+PYTHON="${PYTHON:-}"
+if [ -z "$PYTHON" ]; then
+  if python3 -c 'import sys' >/dev/null 2>&1; then PYTHON=python3; else PYTHON=python; fi
+fi
 mkdir -p "$OUT"
 
-kubectl -n "$NS" set env deployment/client-api TOKEN_TTL_SECONDS=3600 >/dev/null
-kubectl -n "$NS" set env deployment/auth ACCESS_TOKEN_TTL_SECONDS=3600 >/dev/null
+if [ "${SKIP_TTL_ENV:-0}" != "1" ]; then
+  kubectl -n "$NS" set env deployment/client-api TOKEN_TTL_SECONDS=3600 >/dev/null
+  kubectl -n "$NS" set env deployment/auth ACCESS_TOKEN_TTL_SECONDS=3600 >/dev/null
+  kubectl -n "$NS" rollout status deployment/client-api --timeout=120s >/dev/null
+  kubectl -n "$NS" rollout status deployment/auth --timeout=120s >/dev/null
+fi
 
 run() {
   local replicas="$1" label="$2"
@@ -31,7 +39,7 @@ run() {
 run 1 one
 run 3 three
 
-python3 - "$OUT/throughput-one.json" "$OUT/throughput-three.json" <<'PY'
+"$PYTHON" - "$OUT/throughput-one.json" "$OUT/throughput-three.json" <<'PY'
 import json, sys
 one = json.load(open(sys.argv[1]))["metrics"]["http_reqs"]["rate"]
 three = json.load(open(sys.argv[2]))["metrics"]["http_reqs"]["rate"]

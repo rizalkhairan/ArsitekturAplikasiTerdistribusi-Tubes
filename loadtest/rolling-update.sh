@@ -6,10 +6,18 @@ set -euo pipefail
 NS="${NAMESPACE:-sistem-informasi-kebencanaan-bnpb}"
 BASE="${BASE_URL:-http://client-api:8080}"
 OUT="${OUT:-loadtest/results}"
+PYTHON="${PYTHON:-}"
+if [ -z "$PYTHON" ]; then
+  if python3 -c 'import sys' >/dev/null 2>&1; then PYTHON=python3; else PYTHON=python; fi
+fi
 mkdir -p "$OUT"
 
-kubectl -n "$NS" set env deployment/client-api TOKEN_TTL_SECONDS=3600 >/dev/null
-kubectl -n "$NS" set env deployment/auth ACCESS_TOKEN_TTL_SECONDS=3600 >/dev/null
+if [ "${SKIP_TTL_ENV:-0}" != "1" ]; then
+  kubectl -n "$NS" set env deployment/client-api TOKEN_TTL_SECONDS=3600 >/dev/null
+  kubectl -n "$NS" set env deployment/auth ACCESS_TOKEN_TTL_SECONDS=3600 >/dev/null
+  kubectl -n "$NS" rollout status deployment/client-api --timeout=120s >/dev/null
+  kubectl -n "$NS" rollout status deployment/auth --timeout=120s >/dev/null
+fi
 kubectl -n "$NS" scale deployment/aggregator --replicas=3 >/dev/null
 kubectl -n "$NS" rollout status deployment/aggregator --timeout=120s
 
@@ -32,7 +40,7 @@ wait "$K6_PID"
 K6_STATUS=$?
 set -e
 
-python3 - "$OUT/rolling-summary.json" <<'PY'
+"$PYTHON" - "$OUT/rolling-summary.json" <<'PY'
 import json, sys
 m = json.load(open(sys.argv[1]))["metrics"]
 unexpected = m.get("unexpected_errors", {}).get("count", 0)

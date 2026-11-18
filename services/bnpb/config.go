@@ -156,7 +156,7 @@ func loadConfig() (config, error) {
 	}
 	cfg.SensorPageLimit = envInt("SENSOR_PAGE_LIMIT", 100)
 	cfg.SensorMaxPages = envInt("SENSOR_MAX_PAGES", 20)
-	cfg.SensorQualityEnum = splitCSV(env("SENSOR_QUALITY_ENUM", "good,fair,poor,degraded,unknown"))
+	cfg.SensorQualityEnum = splitCSV(env("SENSOR_QUALITY_ENUM", "ok,good,fair,poor,degraded,unknown"))
 	cfg.SensorSeaMin = envFloat("SENSOR_SEA_LEVEL_MIN", -10)
 	cfg.SensorSeaMax = envFloat("SENSOR_SEA_LEVEL_MAX", 10)
 	cfg.SensorWaveMin = envFloat("SENSOR_WAVE_MIN", 0)

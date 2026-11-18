@@ -9,6 +9,11 @@
 #      work is not).
 set -euo pipefail
 
+PYTHON="${PYTHON:-}"
+if [ -z "$PYTHON" ]; then
+  if python3 -c 'import sys' >/dev/null 2>&1; then PYTHON=python3; else PYTHON=python; fi
+fi
+
 NS="${NAMESPACE:-sistem-informasi-kebencanaan-bnpb}"
 OUT="${OUT:-loadtest/results}"
 mkdir -p "$OUT"
@@ -24,13 +29,13 @@ kubectl -n "$NS" port-forward svc/bmkg 18083:8083 >/dev/null 2>&1 &
 BMKG_PF=$!
 kubectl -n "$NS" port-forward svc/pvmbg 18082:8082 >/dev/null 2>&1 &
 PVMBG_PF=$!
-sleep 2
+sleep 5
 
 curl -fsS http://127.0.0.1:18095/events > "$OUT/detector-events.json"
 curl -fsS http://127.0.0.1:18083/admin/requests > "$OUT/detector-bmkg.json"
 curl -fsS http://127.0.0.1:18082/admin/requests > "$OUT/detector-pvmbg.json"
 
-python3 - "$OUT" <<'PY'
+"$PYTHON" - "$OUT" <<'PY'
 import json, sys, collections, datetime
 
 out = sys.argv[1]

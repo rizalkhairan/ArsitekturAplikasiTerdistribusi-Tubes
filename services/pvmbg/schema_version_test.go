@@ -7,6 +7,18 @@ import (
 	"testing"
 )
 
+func TestSchemaVersionAdminAcceptsTesterVersionBody(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/admin/schema-version", strings.NewReader(`{"version":2}`))
+	w := httptest.NewRecorder()
+	schemaVersionHandler(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("tester version body returned %d: %s", w.Code, w.Body.String())
+	}
+	if got := schemaMode.Load().(string); got != "additive" {
+		t.Fatalf("active schema mode=%q, want additive", got)
+	}
+}
+
 func TestSchemaVersionAdminSwitchesCompatibleAndBreakingModes(t *testing.T) {
 	t.Setenv("ADMIN_USERNAME", "admin")
 	t.Setenv("ADMIN_PASSWORD", "secret")

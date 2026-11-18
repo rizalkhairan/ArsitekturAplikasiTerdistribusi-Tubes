@@ -455,6 +455,10 @@ done < <(jq -r '.[].message_id' "$tmp/poison-new")
   || fail 'expected one exact raw DLQ payload for each of the four poison classes'
 
 # A clean field report sent after poison records still completes successfully.
+# The poison section can take longer than the 60s local access-token TTL.
+login field-user "$FIELD_USER_PASSWORD" "$tmp/field-login-after-poison"
+field_token="$(jq -r '.data.accessToken // .accessToken // empty' "$tmp/field-login-after-poison")"
+[[ -n "$field_token" ]] || fail 'field-user login before final report did not include accessToken'
 control_key="p3-after-poison-$RANDOM"
 control_report="{\"report_id\":\"$control_key\",\"reported_at\":\"2026-11-15T00:00:00Z\",\"description\":\"valid report after poison records\"}"
 curl_status 202 "$tmp/after-poison-accepted" -X POST "$CLIENT_API_URL/field-reports" \

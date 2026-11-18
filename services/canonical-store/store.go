@@ -64,10 +64,11 @@ type RequestLog struct {
 }
 
 type Store struct {
-	mu      sync.Mutex
-	path    string
-	state   diskState
-	request []RequestLog
+	mu        sync.RWMutex
+	persistMu sync.Mutex
+	path      string
+	state     diskState
+	request   []RequestLog
 }
 
 func newStore(path string) (*Store, error) {
@@ -92,12 +93,21 @@ func newStore(path string) (*Store, error) {
 	return s, nil
 }
 
-func (s *Store) persistLocked() error {
-	tmp := s.path + ".tmp"
+func (s *Store) persistSnapshot() error {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+
+	// Serialize a consistent snapshot while holding only the read lock. The
+	// slow disk write happens after the lock is released, so GETs are not
+	// blocked behind a full-state rewrite.
+	s.mu.RLock()
 	raw, err := json.MarshalIndent(s.state, "", " ")
+	s.mu.RUnlock()
 	if err != nil {
 		return err
 	}
+
+	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
 		return err
 	}
@@ -127,8 +137,18 @@ func (s *Store) MutateAdmin(source, ref string, version int64, operation string,
 
 func (s *Store) mutate(source, ref string, version int64, operation, partition string, epoch int64, event *HazardEvent, enforceFence bool) (storedEvent, bool, bool, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	stored, created, replayed, err := s.mutateLocked(source, ref, version, operation, partition, epoch, event, enforceFence)
+	s.mu.Unlock()
+	if err != nil {
+		return stored, created, replayed, err
+	}
+	if err := s.persistSnapshot(); err != nil {
+		return storedEvent{}, false, false, err
+	}
+	return stored, created, replayed, nil
+}
 
+func (s *Store) mutateLocked(source, ref string, version int64, operation, partition string, epoch int64, event *HazardEvent, enforceFence bool) (storedEvent, bool, bool, error) {
 	if source == "" || ref == "" {
 		return storedEvent{}, false, false, fmt.Errorf("source and source_ref_id are required")
 	}
@@ -211,9 +231,6 @@ func (s *Store) mutate(source, ref string, version int64, operation, partition s
 		}
 	}
 	s.state.Events[k] = stored
-	if err := s.persistLocked(); err != nil {
-		return storedEvent{}, false, false, err
-	}
 	return stored, !had, false, nil
 }
 
@@ -249,8 +266,8 @@ type QueryResult struct {
 }
 
 func (s *Store) Query(q Query) QueryResult {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	items := make([]storedEvent, 0, len(s.state.Events))
 	for _, event := range s.state.Events {
 		if event.Deleted {
@@ -295,8 +312,8 @@ func (s *Store) Query(q Query) QueryResult {
 }
 
 func (s *Store) LegacyList(source, since string, limit int) []storedEvent {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	items := make([]storedEvent, 0, len(s.state.Events))
 	for _, event := range s.state.Events {
 		if event.Deleted {
@@ -323,8 +340,8 @@ func (s *Store) LegacyList(source, since string, limit int) []storedEvent {
 }
 
 func (s *Store) Checksum(source string) (int, string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	refs := make([]string, 0, len(s.state.Events))
 	for _, event := range s.state.Events {
 		if event.Deleted {
@@ -347,8 +364,8 @@ func (s *Store) Checksum(source string) (int, string) {
 }
 
 func (s *Store) Location(hazardID string) (storedEvent, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	for _, event := range s.state.Events {
 		if event.Deleted {
 			continue
@@ -361,16 +378,16 @@ func (s *Store) Location(hazardID string) (storedEvent, bool) {
 }
 
 func (s *Store) Requests() []RequestLog {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	out := make([]RequestLog, len(s.request))
 	copy(out, s.request)
 	return out
 }
 
 func (s *Store) Counts() map[string]int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	counts := map[string]int{}
 	for _, event := range s.state.Events {
 		if event.Deleted {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
@@ -171,12 +172,16 @@ func serviceAuth(r *http.Request) bool {
 }
 
 func adminAuth(r *http.Request) bool {
+	// The mock admin endpoint is intentionally callable by the course Tester
+	// Agent, which has no application credentials. Human/admin callers may
+	// still use Basic Auth when the credentials are configured.
+	u, p, ok := r.BasicAuth()
+	if !ok {
+		return true
+	}
 	username := os.Getenv("ADMIN_USERNAME")
 	password := os.Getenv("ADMIN_PASSWORD")
-
-	u, p, ok := r.BasicAuth()
-
-	return ok && u == username && p == password
+	return username != "" && password != "" && u == username && p == password
 }
 
 func delay() {
@@ -317,15 +322,37 @@ func schemaVersionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+	if err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
 	var request struct {
 		Enabled *bool  `json:"enabled"`
 		Mode    string `json:"mode"`
+		Version int    `json:"version"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := json.Unmarshal(raw, &request); err != nil {
+		log.Printf("schema admin rejected body=%q error=%v", raw, err)
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	mode := request.Mode
+	if mode == "" && request.Version != 0 {
+		// The course Tester Agent uses the mock's numeric schema version.
+		switch request.Version {
+		case 1:
+			mode = "baseline"
+		case 2:
+			mode = "additive"
+		case 3:
+			mode = "rename"
+		case 4:
+			mode = "type_change"
+		default:
+			mode = "missing_required"
+		}
+	}
 	if mode == "" && request.Enabled != nil {
 		if *request.Enabled {
 			mode = "additive"
@@ -336,6 +363,7 @@ func schemaVersionHandler(w http.ResponseWriter, r *http.Request) {
 	switch mode {
 	case "baseline", "additive", "rename", "type_change", "missing_required":
 	default:
+		log.Printf("schema admin rejected body=%q mode=%q", raw, mode)
 		http.Error(w, "mode must be baseline, additive, rename, type_change, or missing_required", http.StatusBadRequest)
 		return
 	}

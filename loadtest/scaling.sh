@@ -10,8 +10,12 @@ mkdir -p "$OUT"
 
 # Raise the token TTL for the duration of the load test. The 60s production TTL
 # would otherwise turn a load test into an auth-refresh test.
-kubectl -n "$NS" set env deployment/client-api TOKEN_TTL_SECONDS=3600 >/dev/null
-kubectl -n "$NS" set env deployment/auth ACCESS_TOKEN_TTL_SECONDS=3600 >/dev/null
+if [ "${SKIP_TTL_ENV:-0}" != "1" ]; then
+  kubectl -n "$NS" set env deployment/client-api TOKEN_TTL_SECONDS=3600 >/dev/null
+  kubectl -n "$NS" set env deployment/auth ACCESS_TOKEN_TTL_SECONDS=3600 >/dev/null
+  kubectl -n "$NS" rollout status deployment/client-api --timeout=120s >/dev/null
+  kubectl -n "$NS" rollout status deployment/auth --timeout=120s >/dev/null
+fi
 
 kubectl -n "$NS" scale deployment/aggregator --replicas=3
 kubectl -n "$NS" rollout status deployment/aggregator --timeout=120s

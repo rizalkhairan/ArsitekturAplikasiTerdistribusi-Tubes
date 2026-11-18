@@ -1,10 +1,13 @@
 package bnpb
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"time"
@@ -12,17 +15,33 @@ import (
 	"github.com/rizalkhairan/distributed-system/client-api/internal/middleware"
 )
 
+const defaultRetryBudget = 8 * time.Second
+
 type Client struct {
-	baseURL    string
-	http       *http.Client
+	baseURL     string
+	http        *http.Client
 	internalKey string
+	retries     int
 }
 
-func NewClient(baseURL string, timeout time.Duration, internalKey string) *Client {
+func NewClient(baseURL string, timeout time.Duration, internalKey string, retries int) *Client {
+	if retries < 0 {
+		retries = 0
+	}
+	// The default transport keeps only two idle connections per host. Under
+	// load that turns every small burst into new TCP connections, which is
+	// especially costly while Aggregator endpoints are churning. Keep enough
+	// idle capacity for the admission limit.
+	transport := &http.Transport{
+		MaxIdleConns:        512,
+		MaxIdleConnsPerHost: 256,
+		IdleConnTimeout:     90 * time.Second,
+	}
 	return &Client{
-		baseURL:    baseURL,
-		http:       &http.Client{Timeout: timeout},
+		baseURL:     baseURL,
+		http:        &http.Client{Timeout: timeout, Transport: transport},
 		internalKey: internalKey,
+		retries:     retries,
 	}
 }
 
@@ -95,7 +114,7 @@ func (c *Client) ListHazards(ctx context.Context, source, severity, since string
 	}
 
 	start := time.Now()
-	resp, err := c.http.Do(req)
+	resp, err := c.doWithRetry(ctx, req)
 	latency := time.Since(start)
 	if err != nil {
 		log.Printf(`{"corr_id":"%s","method":"GET","path":%q,"latency_ms":%d,"error":"%s"}`, corrID, u.String(), latency.Milliseconds(), err.Error())
@@ -132,7 +151,7 @@ func (c *Client) GetHazard(ctx context.Context, id string) (*Hazard, http.Header
 	}
 
 	start := time.Now()
-	resp, err := c.http.Do(req)
+	resp, err := c.doWithRetry(ctx, req)
 	latency := time.Since(start)
 	if err != nil {
 		log.Printf(`{"corr_id":"%s","method":"GET","path":%q,"latency_ms":%d,"error":"%s"}`, corrID, "/hazards/"+id, latency.Milliseconds(), err.Error())
@@ -154,4 +173,103 @@ func (c *Client) GetHazard(ctx context.Context, id string) (*Hazard, http.Header
 		return nil, resp.Header, fmt.Errorf("bnpb get decode: %w", err)
 	}
 	return &hazard, resp.Header, nil
+}
+
+// doWithRetry retries only idempotent read requests. It retries transport
+// failures and gateway/unavailable responses, which are the errors produced
+// while an Aggregator endpoint is being added or removed. Client errors such as
+// 404 are returned immediately.
+func (c *Client) doWithRetry(ctx context.Context, req *http.Request) (*http.Response, error) {
+	retryCtx, cancel := context.WithTimeout(ctx, defaultRetryBudget)
+	delivered := false
+	defer func() {
+		if !delivered {
+			cancel()
+		}
+	}()
+
+	attempts := c.retries + 1
+	var lastResp *http.Response
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if attempt > 1 {
+			delay := retryDelay(attempt)
+			timer := time.NewTimer(delay)
+			select {
+			case <-retryCtx.Done():
+				timer.Stop()
+				return lastResp, retryCtx.Err()
+			case <-timer.C:
+			}
+		}
+
+		resp, err := c.http.Do(req.Clone(retryCtx))
+		if err == nil && !retryableStatus(resp.StatusCode) {
+			// Collect the body inside the retry boundary. A proxy endpoint
+			// that sends headers and then stalls must be retried rather than
+			// surfacing as a decode timeout after the retry loop has ended.
+			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+			_ = resp.Body.Close()
+			if readErr != nil {
+				lastErr = fmt.Errorf("read body: %w", readErr)
+				if retryCtx.Err() != nil {
+					return nil, retryCtx.Err()
+				}
+				continue
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(raw))
+			delivered = true
+			resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+			return resp, nil
+		}
+		if err != nil {
+			lastErr = err
+		} else {
+			lastErr = fmt.Errorf("status %d", resp.StatusCode)
+			// Drain a bounded amount so the connection can be reused; the
+			// response body is not useful after a retryable status.
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+			_ = resp.Body.Close()
+			lastResp = resp
+		}
+		if retryCtx.Err() != nil {
+			return lastResp, retryCtx.Err()
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("upstream request failed")
+	}
+	return lastResp, lastErr
+}
+
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnClose) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
+}
+
+func retryableStatus(status int) bool {
+	switch status {
+	case http.StatusRequestTimeout, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func retryDelay(attempt int) time.Duration {
+	// 50ms, 100ms, 200ms, 400ms, then 800ms capped. With the default eight
+	// retries this covers the window in which Kubernetes removes a terminating
+	// Aggregator endpoint, while staying below the HTTP write timeout.
+	base := 50 * time.Millisecond << (attempt - 2)
+	if base > 800*time.Millisecond {
+		base = 800 * time.Millisecond
+	}
+	jitter := time.Duration(rand.Int63n(int64(base/2) + 1))
+	return base + jitter
 }

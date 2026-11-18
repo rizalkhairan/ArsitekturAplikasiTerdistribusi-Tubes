@@ -14,6 +14,9 @@ resources:
   - 32-auth.yaml
   - 40-bmkg.yaml
   - 41-pvmbg.yaml
+  - 50-kafka.yaml
+  - 52-event-consumers.yaml
+  - 53-satellite.yaml
   - sensor-pantai/base
 labels:
   - pairs:
@@ -26,3 +29,6 @@ configMapGenerator:
     options:
       labels:
         grafana_dashboard: "1"
+  - name: satellite-province-centroids
+    files:
+      - province-centroids.json=satellite-province-centroids.json

@@ -14,5 +14,9 @@ docker build -f services/coordinator/Dockerfile -t "bnpb-gateway/coordinator:${T
 docker build -f services/canonical-store/Dockerfile -t "bnpb-gateway/canonical-store:${TAG}" .
 docker build -f services/field-notifier/Dockerfile -t "bnpb-gateway/field-notifier:${TAG}" .
 docker build -f services/ingest-pipeline/Dockerfile -t "bnpb-gateway/ingest-pipeline:${TAG}" services/ingest-pipeline
+docker build -f services/dashboard-updater/Dockerfile -t "bnpb-gateway/dashboard-updater:${TAG}" services/dashboard-updater
+docker build -f services/notifier/Dockerfile -t "bnpb-gateway/notifier:${TAG}" services/notifier
+docker build -f services/analytics-consumer/Dockerfile -t "bnpb-gateway/analytics-consumer:${TAG}" services/analytics-consumer
+docker build -f services/satellite-processor/Dockerfile -t "bnpb-gateway/satellite-processor:${TAG}" services
 
 echo "built images with tag ${TAG}"

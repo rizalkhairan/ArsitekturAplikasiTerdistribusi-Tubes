@@ -28,11 +28,12 @@ func main() {
 		log.Fatalf("Auth initialization failed: %v", err)
 	}
 
-	bnpbClient := bnpb.NewClient(cfg.BNPBURL, cfg.UpstreamTimeout, cfg.BNPBInternalKey)
+	bnpbClient := bnpb.NewClient(cfg.BNPBURL, cfg.UpstreamTimeout, cfg.BNPBInternalKey, cfg.UpstreamRetries)
 	authProxy := auth.NewAuthProxy(cfg.AuthServiceURL)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
+	mux.HandleFunc("GET /readyz", handleHealth)
 	registry := obs.NewRegistry("client-api")
 	mux.Handle("GET /metrics", registry.Handler())
 	mux.HandleFunc("POST /auth/login", handleLogin(authProxy))

@@ -59,7 +59,7 @@ func DefaultValidationConfig() ValidationConfig {
 		WaveMin: 0, WaveMax: 50,
 		MaxFuture: 5 * time.Minute, MaxAge: 0,
 		QualityEnum: map[string]bool{
-			"good": true, "fair": true, "poor": true, "degraded": true, "unknown": true,
+			"ok": true, "good": true, "fair": true, "poor": true, "degraded": true, "unknown": true,
 		},
 		RequireUTC: true,
 	}

@@ -4,7 +4,8 @@
 #
 # Usage:
 #   ./scripts/gameday.sh                      # list scenarios, run none
-#   ./scripts/gameday.sh kill-pod kill-node   # run named practice scenarios
+#   ./scripts/gameday.sh kill-leader          # run named practice scenarios
+#   ./scripts/gameday.sh kill-leader wipe-node # destructive node scenario
 #   RUN_ALL=1 ./scripts/gameday.sh            # run every listed practice scenario
 set -uo pipefail
 
@@ -60,7 +61,7 @@ if [ "${#scenarios[@]}" -eq 0 ] && [ "${RUN_ALL:-0}" != "1" ]; then
 fi
 
 if [ "${RUN_ALL:-0}" = "1" ] && [ "${#scenarios[@]}" -eq 0 ]; then
-  mapfile -t scenarios < <(tester list 2>/dev/null | awk '/practice/ {print $NF}')
+  mapfile -t scenarios < <(tester list 2>/dev/null | awk 'NF && $1 !~ /^#/ {print $NF}')
 fi
 
 snapshot "before"

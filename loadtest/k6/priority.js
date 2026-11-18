@@ -13,6 +13,8 @@ const mediaControlled = new Counter('media_controlled_rejections');
 const fieldControlled = new Counter('field_controlled_rejections');
 const fieldServed = new Counter('field_served');
 const mediaServed = new Counter('media_served');
+// Rate of unexpected field failures. Controlled 429 shedding is tracked
+// separately: it is an overload response, not an application error.
 const fieldErrorRate = new Rate('field_error_rate');
 
 export const options = {
@@ -32,6 +34,8 @@ export const options = {
   },
   thresholds: {
     field_error_rate: ['rate<0.05'],
+    field_served: ['count>0'],
+    media_controlled_rejections: ['count>0'],
   },
 };
 
@@ -67,7 +71,7 @@ export function field(data) {
     fieldErrorRate.add(false);
   } else if (status === 429) {
     fieldControlled.add(1);
-    fieldErrorRate.add(true);
+    fieldErrorRate.add(false);
   } else {
     fieldErrorRate.add(true);
   }
