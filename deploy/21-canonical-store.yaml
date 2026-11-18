@@ -23,8 +23,14 @@ spec:
     metadata:
       labels: {app: canonical-store, role: store}
     spec:
-      nodeSelector:
-        node-role.kubernetes.io/control-plane: ""
+      # kind uses value "" and k3s uses "true" for the control-plane role.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: Exists
       tolerations:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists

@@ -25,8 +25,14 @@ spec:
     spec:
       # Mandatory Tester scenarios kill workers only; pinning the single-writer
       # coordination store to the control-plane is a conscious limitation.
-      nodeSelector:
-        node-role.kubernetes.io/control-plane: ""
+      # Use an existence rule because kind uses value "" and k3s uses "true".
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: Exists
       tolerations:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
