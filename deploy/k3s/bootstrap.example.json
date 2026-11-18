@@ -1,0 +1,14 @@
+{
+  "k3s_version": "v1.34.1+k3s1",
+  "image_url": "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2",
+  "checksums_url": "https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS",
+  "network": "bnpb-net",
+  "bridge": "virbr-bnpb",
+  "subnet": "192.168.56.0/24",
+  "gateway": "192.168.56.1",
+  "username": "bnpb",
+  "workers": [
+    {"name": "node-app", "ip": "192.168.56.11", "mac": "52:54:00:bb:00:11", "memory_mib": 2048, "cpus": 2, "disk_gib": 40},
+    {"name": "node-store", "ip": "192.168.56.12", "mac": "52:54:00:bb:00:12", "memory_mib": 2048, "cpus": 2, "disk_gib": 32}
+  ]
+}

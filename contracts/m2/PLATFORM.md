@@ -64,7 +64,8 @@ directly to browsers/CLI users.
 
 ## Configuration and credential names
 
-`platform.yaml` provides the Namespace and two nonsecret ConfigMaps. Import only
+[Deployment platform resources](../../deploy/kubernetes/base/platform.yaml)
+provide the Namespace and two nonsecret ConfigMaps. Import only
 the keys a workload uses with `configMapKeyRef`; do not inject every endpoint into
 every pod. `bnpb-platform` contains stable service addresses. `bnpb-telemetry`
 contains export configuration and the metrics bind address. Per-component tuning

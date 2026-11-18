@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+- name: BNPB
+  folder: BNPB
+  type: file
+  options:
+    path: /etc/observability/dashboards

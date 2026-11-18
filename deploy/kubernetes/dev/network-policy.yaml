@@ -1,0 +1,107 @@
+# Development-only firewall controller; retain kindnet routing and kube-proxy.
+# https://www.kube-router.io/docs/user-guide/#running-as-agent
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bnpb-network-policy
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: bnpb-network-policy
+rules:
+- apiGroups: [""]
+  resources: [nodes, pods, namespaces, services]
+  verbs: [get, list, watch]
+# The pinned controller starts EndpointSlice informers even in firewall-only mode.
+- apiGroups: [discovery.k8s.io]
+  resources: [endpointslices]
+  verbs: [get, list, watch]
+- apiGroups: [networking.k8s.io]
+  resources: [networkpolicies]
+  verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: bnpb-network-policy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: bnpb-network-policy
+subjects:
+- kind: ServiceAccount
+  name: bnpb-network-policy
+  namespace: kube-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: bnpb-network-policy
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bnpb-network-policy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bnpb-network-policy
+    spec:
+      serviceAccountName: bnpb-network-policy
+      hostNetwork: true
+      priorityClassName: system-node-critical
+      tolerations:
+      - operator: Exists
+      containers:
+      - name: firewall
+        image: docker.io/cloudnativelabs/kube-router:v2.6.2
+        imagePullPolicy: IfNotPresent
+        args:
+        - --run-router=false
+        - --run-service-proxy=false
+        - --run-firewall=true
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        securityContext:
+          privileged: true
+        resources:
+          requests:
+            memory: 128Mi
+          limits:
+            memory: 256Mi
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 20244
+          periodSeconds: 5
+          failureThreshold: 24
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 20244
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 20244
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        volumeMounts:
+        - name: modules
+          mountPath: /lib/modules
+          readOnly: true
+        - name: xtables-lock
+          mountPath: /run/xtables.lock
+      volumes:
+      - name: modules
+        hostPath:
+          path: /lib/modules
+      - name: xtables-lock
+        hostPath:
+          path: /run/xtables.lock
+          type: FileOrCreate

@@ -7,7 +7,7 @@ TAG="${TAG:-m2}"
 
 docker build -f services/bnpb/Dockerfile -t "bnpb-gateway/aggregator:${TAG}" .
 docker build -f services/client-api/Dockerfile -t "bnpb-gateway/client-api:${TAG}" .
-docker build -f services/auth/Dockerfile -t "bnpb-gateway/auth:${TAG}" services/auth
+docker build -f services/auth/Dockerfile -t "bnpb-gateway/auth:${TAG}" services
 docker build -f services/bmkg/Dockerfile -t "bnpb-gateway/bmkg:${TAG}" services/bmkg
 docker build -f services/pvmbg/Dockerfile -t "bnpb-gateway/pvmbg:${TAG}" services/pvmbg
 docker build -f services/coordinator/Dockerfile -t "bnpb-gateway/coordinator:${TAG}" .

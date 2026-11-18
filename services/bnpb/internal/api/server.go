@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rizalkhairan/distributed-system/bnpb/internal/canonical"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/database"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/dlqclient"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/health"
@@ -38,6 +39,7 @@ type Server struct {
 	stalenessThreshold time.Duration
 
 	store          *storeclient.Client
+	canonical      *canonical.Store
 	dlq            *dlqclient.Client
 	auditToken     string
 	freshness      FreshnessFunc
@@ -49,12 +51,13 @@ type Server struct {
 	cacheMu        sync.Mutex
 	refreshMu      sync.Mutex
 	listCache      map[string]listCacheEntry
+	refreshing     map[string]bool
 	cacheTTL       time.Duration
 }
 
 func NewServer(addr string, db, writeDB *sql.DB, topic, internalKey string, registry *health.Registry, stalenessThreshold time.Duration) *Server {
 	s := &Server{db: db, writeDB: writeDB, topic: topic, internalKey: internalKey, health: registry, stalenessThreshold: stalenessThreshold,
-		listCache: map[string]listCacheEntry{}, cacheTTL: 500 * time.Millisecond}
+		listCache: map[string]listCacheEntry{}, refreshing: map[string]bool{}, cacheTTL: 500 * time.Millisecond}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /readyz", s.handleReady)
@@ -171,27 +174,38 @@ func (s *Server) SetSensorFallback(fn func() ([]database.HazardEvent, time.Time,
 }
 
 // listEvents caches canonical reads briefly to avoid a shared-store bottleneck.
+// Expired entries are served stale while one background refresh runs. Blocking
+// every request on a slow store read turns a cache expiry into a latency cliff;
+// stale-while-revalidate keeps reads responsive while freshness is still bounded
+// by READ_CACHE_TTL and the freshness headers.
 func (s *Server) listEvents(ctx context.Context, source, severity, since string, limit int) ([]database.HazardEvent, error) {
 	key := source + "\x00" + severity + "\x00" + since + "\x00" + strconv.Itoa(limit)
 	now := time.Now()
 	s.cacheMu.Lock()
-	if entry, ok := s.listCache[key]; ok && now.Before(entry.expires) {
-		events := entry.events
+	if entry, ok := s.listCache[key]; ok {
+		if now.Before(entry.expires) {
+			events := entry.events
+			s.cacheMu.Unlock()
+			return events, nil
+		}
+		if !s.refreshing[key] {
+			s.refreshing[key] = true
+			s.cacheMu.Unlock()
+			go s.refreshList(key, source, severity, since, limit)
+			return entry.events, nil
+		}
 		s.cacheMu.Unlock()
-		return events, nil
+		return entry.events, nil
 	}
 	s.cacheMu.Unlock()
 
-	// Serialize cache refreshes. Without this, every request that arrives just
-	// after expiry calls the shared store at once, which can exhaust its read
-	// path and turn a cache miss into a 503. Waiters re-check the cache after
-	// the first refresh completes.
+	// Cold-cache path. Serialize the first fill so a burst of requests does not
+	// stampede the canonical store; later expiries use the stale path above.
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()
 
-	now = time.Now()
 	s.cacheMu.Lock()
-	if entry, ok := s.listCache[key]; ok && now.Before(entry.expires) {
+	if entry, ok := s.listCache[key]; ok {
 		events := entry.events
 		s.cacheMu.Unlock()
 		return events, nil
@@ -200,37 +214,63 @@ func (s *Server) listEvents(ctx context.Context, source, severity, since string,
 
 	events, err := s.store.List(ctx, source, since, limit)
 	if err != nil {
-		// During a store or endpoint transition, serving the last-known-good
-		// response is better than turning a short read outage into a 5xx.
-		// The freshness headers still expose the source status.
-		s.cacheMu.Lock()
-		if entry, ok := s.listCache[key]; ok {
-			events = entry.events
-			err = nil
-		}
-		s.cacheMu.Unlock()
-	}
-	if err != nil {
 		return nil, err
 	}
-	if severity != "" {
-		filtered := events[:0]
-		for _, event := range events {
-			if event.Severity == severity {
-				filtered = append(filtered, event)
-			}
-		}
-		events = filtered
-	}
-	if s.cacheTTL > 0 {
+	s.storeList(key, source, severity, events)
+	return filterSeverity(events, severity), nil
+}
+
+func (s *Server) refreshList(key, source, severity, since string, limit int) {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	defer func() {
 		s.cacheMu.Lock()
-		s.listCache[key] = listCacheEntry{events: events, expires: now.Add(s.cacheTTL)}
-		if len(s.listCache) > 512 {
-			s.listCache = map[string]listCacheEntry{key: {events: events, expires: now.Add(s.cacheTTL)}}
-		}
+		delete(s.refreshing, key)
 		s.cacheMu.Unlock()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events, err := s.store.List(ctx, source, since, limit)
+	if err != nil {
+		// Keep the last-known-good entry. The next read will retry the refresh.
+		return
 	}
-	return events, nil
+	s.storeList(key, source, severity, events)
+}
+
+func (s *Server) storeList(key, source, severity string, events []database.HazardEvent) {
+	if s.cacheTTL <= 0 {
+		return
+	}
+	// Keep the unfiltered list in the cache so a severity-filtered key does not
+	// trigger a second store read for the same source/window.
+	baseKey := source + "\x00\x00" + strings.Split(key, "\x00")[2] + "\x00" + strings.Split(key, "\x00")[3]
+	filtered := filterSeverity(events, severity)
+	now := time.Now()
+	s.cacheMu.Lock()
+	s.listCache[key] = listCacheEntry{events: filtered, expires: now.Add(s.cacheTTL)}
+	s.listCache[baseKey] = listCacheEntry{events: events, expires: now.Add(s.cacheTTL)}
+	if len(s.listCache) > 512 {
+		s.listCache = map[string]listCacheEntry{
+			key:     {events: filtered, expires: now.Add(s.cacheTTL)},
+			baseKey: {events: events, expires: now.Add(s.cacheTTL)},
+		}
+	}
+	s.cacheMu.Unlock()
+}
+
+func filterSeverity(events []database.HazardEvent, severity string) []database.HazardEvent {
+	if severity == "" {
+		return events
+	}
+	filtered := make([]database.HazardEvent, 0, len(events))
+	for _, event := range events {
+		if event.Severity == severity {
+			filtered = append(filtered, event)
+		}
+	}
+	return filtered
 }
 
 // internalAuth checks the shared secret for internal service-to-service calls.

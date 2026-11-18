@@ -18,6 +18,7 @@ resources:
   - 52-event-consumers.yaml
   - 53-satellite.yaml
   - sensor-pantai/base
+  - kubernetes/observability
 labels:
   - pairs:
       app.kubernetes.io/part-of: bnpb-gateway

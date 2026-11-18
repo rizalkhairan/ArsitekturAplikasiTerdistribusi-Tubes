@@ -1,0 +1,75 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: bnpb-private-storage
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:
+      - ''
+      apiVersions:
+      - v1
+      operations:
+      - CREATE
+      - UPDATE
+      resources:
+      - pods
+      - pods/ephemeralcontainers
+  matchConditions:
+  - name: application-namespace
+    expression: request.namespace == "sistem-informasi-kebencanaan-bnpb"
+  variables:
+  - name: owner
+    expression: object.spec.serviceAccountName
+  - name: claims
+    expression: '{"bnpb": ["bnpb-m1-data"], "auth": ["auth-data"], "client-api": [], "bmkg": ["bmkg-data"], "pvmbg":
+      ["pvmbg-data"], "kafka": ["kafka-data"], "dashboard-updater": [], "notifier": [], "analytics-consumer": [],
+      "topic-init": [], "prometheus": [], "grafana": [], "tempo": [], "loki": [], "alloy": [], "otel-collector":
+      []}'
+  - name: secrets
+    expression: '{"bnpb": ["bnpb-bmkg-auth", "bnpb-pvmbg-auth", "bnpb-m1-internal-auth"], "auth": ["bnpb-jwt-auth",
+      "bnpb-user-auth"], "client-api": ["bnpb-jwt-auth", "bnpb-m1-internal-auth"], "bmkg": ["bnpb-bmkg-auth"], "pvmbg":
+      ["bnpb-pvmbg-auth", "bnpb-pvmbg-admin"], "kafka": [], "dashboard-updater": [], "notifier": [], "analytics-consumer":
+      [], "topic-init": [], "prometheus": [], "grafana": ["bnpb-grafana-auth"], "tempo": [], "loki": [], "alloy":
+      [], "otel-collector": []}'
+  - name: roles
+    expression: '{"bnpb": "aggregator", "auth": "api", "client-api": "api", "bmkg": "mock", "pvmbg": "mock", "kafka":
+      "broker", "topic-init": "other", "dashboard-updater": "consumer", "notifier": "consumer", "analytics-consumer":
+      "consumer", "prometheus": "other", "grafana": "other", "tempo": "other", "loki": "other", "alloy": "other",
+      "otel-collector": "other"}'
+  - name: containers
+    expression: 'object.spec.containers + (has(object.spec.initContainers) ? object.spec.initContainers : [])'
+  validations:
+  - expression: variables.owner in variables.roles && object.metadata.labels["app.kubernetes.io/name"] == variables.owner
+      && object.metadata.labels["app.kubernetes.io/part-of"] == "bnpb" && object.metadata.labels["role"] == variables.roles[variables.owner]
+    message: Use the registered service account, component name and role.
+  - expression: '!has(object.spec.volumes) || object.spec.volumes.all(v, (variables.owner == "alloy" && v.name ==
+      "kube-api" && has(v.projected) && v.projected.sources.all(s, (has(s.serviceAccountToken) && s.serviceAccountToken.path
+      == "token" && s.serviceAccountToken.expirationSeconds <= 3600) || (has(s.configMap) && s.configMap.name ==
+      "kube-root-ca.crt"))) || has(v.emptyDir) || has(v.configMap) || (has(v.persistentVolumeClaim) && v.persistentVolumeClaim.claimName
+      in variables.claims[variables.owner]))'
+    message: Only owner claims, ConfigMaps and emptyDir are allowed; Alloy alone may project its scoped API token.
+  - expression: variables.containers.all(c, (!has(c.envFrom) || c.envFrom.all(e, !has(e.secretRef))) && (!has(c.env)
+      || c.env.all(e, !has(e.valueFrom) || !has(e.valueFrom.secretKeyRef) || e.valueFrom.secretKeyRef.name in variables.secrets[variables.owner])))
+    message: Secret references must belong to this service; envFrom Secret imports are forbidden.
+  - expression: (!has(object.spec.hostNetwork) || !object.spec.hostNetwork) && (!has(object.spec.hostPID) || !object.spec.hostPID)
+      && (!has(object.spec.hostIPC) || !object.spec.hostIPC) && variables.containers.all(c, has(c.securityContext)
+      && (!has(c.securityContext.privileged) || !c.securityContext.privileged) && has(c.securityContext.allowPrivilegeEscalation)
+      && !c.securityContext.allowPrivilegeEscalation && has(c.securityContext.capabilities) && c.securityContext.capabilities.drop.exists(x,
+      x == "ALL") && (!has(c.securityContext.capabilities.add) || size(c.securityContext.capabilities.add) == 0)
+      && (!has(c.ports) || c.ports.all(p, !has(p.hostPort) || p.hostPort == 0)))
+    message: Application pods cannot access host namespaces, ports or privileged capabilities.
+  - expression: has(object.spec.automountServiceAccountToken) && !object.spec.automountServiceAccountToken
+    message: Automatic application API token mounting is forbidden; Alloy uses an explicit scoped projection.
+  - expression: '!has(object.spec.ephemeralContainers) || size(object.spec.ephemeralContainers) == 0'
+    message: Application debugging uses exec; unregistered ephemeral containers are forbidden.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: bnpb-private-storage
+spec:
+  policyName: bnpb-private-storage
+  validationActions:
+  - Deny

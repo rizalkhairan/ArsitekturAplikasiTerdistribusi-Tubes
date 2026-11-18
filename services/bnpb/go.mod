@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	github.com/google/uuid v1.6.0
+	github.com/lib/pq v1.10.9
 	github.com/rizalkhairan/distributed-system/bmkg v0.0.0
 	github.com/rizalkhairan/distributed-system/observability v0.0.0
 	github.com/twmb/franz-go v1.20.5
@@ -32,3 +33,5 @@ require (
 replace github.com/rizalkhairan/distributed-system/bmkg => ../bmkg
 
 replace github.com/rizalkhairan/distributed-system/observability => ../../libs/observability
+
+replace github.com/rizalkhairan/distributed-system/shared => ../shared

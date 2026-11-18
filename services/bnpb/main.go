@@ -124,6 +124,7 @@ func main() {
 	}
 
 	readAPI := api.NewServer(":"+cfg.APIPort, pools.Read, pools.Write, cfg.KafkaTopic, cfg.InternalAPIKey, registry, cfg.StalenessThreshold)
+	readAPI.SetReadCacheTTL(cfg.ReadCacheTTL)
 	readAPI.SetMetrics(registryMetrics.Handler())
 	readAPI.ConfigureObservability(httpMetrics)
 	if m2 {

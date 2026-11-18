@@ -1,4 +1,4 @@
-# Shared configuration baseline. Workload manifests and telemetry backends follow separately.
+# Shared namespace and platform configuration for the deployment baseline.
 apiVersion: v1
 kind: Namespace
 metadata:

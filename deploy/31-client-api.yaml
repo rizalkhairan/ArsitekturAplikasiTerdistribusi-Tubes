@@ -24,7 +24,8 @@ spec:
             - configMapRef: {name: bnpb-config}
           env:
             - {name: PORT, value: "8080"}
-            - {name: UPSTREAM_TIMEOUT, value: 2s}
+            - {name: UPSTREAM_TIMEOUT, value: 5s}
+            - {name: UPSTREAM_RETRIES, value: "2"}
             - name: JWT_SECRET
               valueFrom: {secretKeyRef: {name: bnpb-secrets, key: JWT_SECRET}}
             - name: BNPB_INTERNAL_KEY

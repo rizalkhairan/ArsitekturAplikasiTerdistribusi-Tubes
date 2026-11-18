@@ -1,0 +1,238 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-tester-agent
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: tester-agent
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-bnpb
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bnpb
+      app.kubernetes.io/part-of: bnpb
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: client-api
+          app.kubernetes.io/part-of: bnpb
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: field-report-consumer
+          app.kubernetes.io/part-of: bnpb
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: satellite-processor
+          app.kubernetes.io/part-of: bnpb
+    ports:
+    - protocol: TCP
+      port: 8085
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-auth
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: auth
+      app.kubernetes.io/part-of: bnpb
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: client-api
+          app.kubernetes.io/part-of: bnpb
+    ports:
+    - protocol: TCP
+      port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-bmkg
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bmkg
+      app.kubernetes.io/part-of: bnpb
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: bnpb
+          app.kubernetes.io/part-of: bnpb
+    ports:
+    - protocol: TCP
+      port: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-pvmbg
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: pvmbg
+      app.kubernetes.io/part-of: bnpb
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: bnpb
+          app.kubernetes.io/part-of: bnpb
+    ports:
+    - protocol: TCP
+      port: 8082
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kafka
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kafka
+      app.kubernetes.io/part-of: bnpb
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: bnpb
+          app.kubernetes.io/part-of: bnpb
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: dashboard-updater
+          app.kubernetes.io/part-of: bnpb
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: notifier
+          app.kubernetes.io/part-of: bnpb
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: analytics-consumer
+          app.kubernetes.io/part-of: bnpb
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: field-report-consumer
+          app.kubernetes.io/part-of: bnpb
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: satellite-processor
+          app.kubernetes.io/part-of: bnpb
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: topic-init
+          app.kubernetes.io/part-of: bnpb
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: client-api
+          app.kubernetes.io/part-of: bnpb
+    ports:
+    - protocol: TCP
+      port: 9092
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-client-entry
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: client-api
+      app.kubernetes.io/part-of: bnpb
+  policyTypes:
+  - Ingress
+  ingress:
+  - ports:
+    - protocol: TCP
+      port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: canonical-storage
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  podSelector:
+    matchLabels:
+      role: store
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: bnpb
+          app.kubernetes.io/part-of: bnpb
+    ports:
+    - protocol: TCP
+      port: 5432
+  - from:
+    - podSelector:
+        matchLabels:
+          role: store
+          app.kubernetes.io/part-of: bnpb
+    ports:
+    - protocol: TCP
+      port: 5432
+    - protocol: TCP
+      port: 8008
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-telemetry-scrapes
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+          app.kubernetes.io/part-of: bnpb
+    ports:
+    - protocol: TCP
+      port: 9090

@@ -1,10 +1,12 @@
 FROM golang:1.26-alpine AS builder
 
 WORKDIR /src/auth
-COPY go.mod go.sum ./
+COPY auth/go.mod auth/go.sum ./
+COPY shared/go.mod shared/go.sum /src/shared/
 RUN go mod download
 
-COPY . ./
+COPY auth/ ./
+COPY shared/ /src/shared/
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/auth .
 
 FROM alpine:3.22

@@ -49,12 +49,14 @@ spec:
             httpGet: {path: /readyz, port: 8085}
             initialDelaySeconds: 5
             periodSeconds: 5
-            failureThreshold: 2
+            timeoutSeconds: 5
+            failureThreshold: 5
           livenessProbe:
             httpGet: {path: /health, port: 8080}
             initialDelaySeconds: 10
             periodSeconds: 10
-            failureThreshold: 3
+            timeoutSeconds: 5
+            failureThreshold: 5
           lifecycle:
             preStop:
               exec:

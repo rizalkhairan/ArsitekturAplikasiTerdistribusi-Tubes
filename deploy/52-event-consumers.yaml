@@ -145,3 +145,30 @@ spec:
           resources:
             requests: {memory: 128Mi}
             limits: {memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard-updater
+spec:
+  selector: {app: dashboard-updater}
+  ports:
+    - {name: http, port: 8080, targetPort: 8080}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notifier
+spec:
+  selector: {app: notifier}
+  ports:
+    - {name: http, port: 8080, targetPort: 8080}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: analytics-consumer
+spec:
+  selector: {app: analytics-consumer}
+  ports:
+    - {name: http, port: 8080, targetPort: 8080}

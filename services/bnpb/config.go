@@ -30,6 +30,7 @@ type config struct {
 	UpstreamTimeout          time.Duration
 	PollInterval             time.Duration
 	StalenessThreshold       time.Duration
+	ReadCacheTTL             time.Duration
 
 	CoordinatorURL   string
 	CoordinatorToken string
@@ -118,6 +119,10 @@ func loadConfig() (config, error) {
 	cfg.StalenessThreshold, err = time.ParseDuration(env("STALENESS_THRESHOLD", "10s"))
 	if err != nil || cfg.StalenessThreshold <= 0 {
 		return cfg, fmt.Errorf("STALENESS_THRESHOLD must be a positive duration, such as 10s")
+	}
+	cfg.ReadCacheTTL, err = time.ParseDuration(env("READ_CACHE_TTL", "2s"))
+	if err != nil || cfg.ReadCacheTTL < 0 {
+		return cfg, fmt.Errorf("READ_CACHE_TTL must be a non-negative duration, such as 2s")
 	}
 	cfg.KafkaPublishRetryLimit, err = strconv.Atoi(env("KAFKA_PUBLISH_RETRY_LIMIT", "3"))
 	if err != nil || cfg.KafkaPublishRetryLimit < 1 {
