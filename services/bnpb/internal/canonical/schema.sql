@@ -62,6 +62,10 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_dist_partition WHERE logicalrelid = 'events':
 -- statement
 CREATE INDEX IF NOT EXISTS events_hazard_id ON events (hazard_id);
 -- statement
+-- The poller resolves every upstream record by source_ref_id before writing;
+-- without this, each lookup is a full distributed scan.
+CREATE INDEX IF NOT EXISTS events_source_ref ON events (source_ref_id);
+-- statement
 CREATE INDEX IF NOT EXISTS events_ingestion ON events (ingested_at, hazard_id);
 -- statement
 CREATE INDEX IF NOT EXISTS events_source_occurred ON events

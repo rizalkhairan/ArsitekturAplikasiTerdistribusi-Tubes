@@ -16,6 +16,7 @@ resources:
   - 50-kafka.yaml
   - 52-event-consumers.yaml
   - 53-satellite.yaml
+  - 70-storage-isolation.yaml
   - sensor-pantai/base
   - kubernetes/base/citus.yaml
   - kubernetes/base/canonical-api.yaml

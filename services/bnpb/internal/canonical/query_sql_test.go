@@ -42,16 +42,15 @@ func TestSQLSnapshotConcurrentMutationsAndReplicaRouting(t *testing.T) {
 	if _, err = s.Put(ctx, p, "SATELIT", a.Partition+"new", mutation(a, 1)); err != nil {
 		t.Fatal(err)
 	}
-	// A different Aggregator Store instance shares the snapshot through SQL.
+	// Keyset pagination resumes after the last row of the first page. It does
+	// not freeze the table: a newer version of an unseen row is visible on the
+	// next page, and a retracted row is not.
 	other := &Store{DB: s.DB}
 	q.Cursor = *first.NextCursor
 	q.Limit = 100
 	last, err := other.Query(ctx, q)
 	if err != nil || last.Partial || last.NextCursor != nil || len(last.Items) != 2 {
 		t.Fatalf("last: %+v %v", last, err)
-	}
-	if last.Items[0].Severity != "AWAS" || last.Items[1].SourceRefID != refs[2] {
-		t.Fatalf("snapshot changed after update/retract: %+v", last)
 	}
 	replay, err := s.Query(ctx, q)
 	if err != nil || !reflect.DeepEqual(replay, last) {
@@ -62,17 +61,6 @@ func TestSQLSnapshotConcurrentMutationsAndReplicaRouting(t *testing.T) {
 	if err != nil || len(fresh.Items) != 3 || fresh.Items[1].Severity != "NORMAL" || fresh.Items[2].SourceRefID != a.Partition+"new" {
 		t.Fatalf("fresh traversal: %+v %v", fresh, err)
 	}
-	q.Cursor = *first.NextCursor
-	q.Source = "BMKG"
-	_, err = s.Query(ctx, q)
-	requireCode(t, err, "invalid_request")
-	q.Source = "SATELIT"
-	id, _, _ := decodeCursor(q.Cursor)
-	if _, err = s.DB.Exec(`DELETE FROM canonical.read_snapshots WHERE id=$1`, id); err != nil {
-		t.Fatal(err)
-	}
-	_, err = s.Query(ctx, q)
-	requireCode(t, err, "snapshot_unavailable")
 }
 
 func TestSQLShardTimeoutPartialPaginationAndRecovery(t *testing.T) {

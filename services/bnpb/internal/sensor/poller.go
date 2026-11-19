@@ -254,7 +254,7 @@ func (p *Poller) pollStation(ctx context.Context, lease coordclient.Lease, stati
 				}
 			}
 			event := ToHazardEvent(obs, station, severity)
-			if _, _, err := p.store.Upsert(ctx, event, 1, lease.Epoch, Source); err != nil {
+			if _, _, err := p.store.UpsertAuto(ctx, event, 1, lease.Epoch, Source); err != nil {
 				if errors.Is(err, storeclient.ErrFenced) {
 					if p.metrics != nil {
 						p.metrics.Fenced.WithLabelValues(Source).Inc()

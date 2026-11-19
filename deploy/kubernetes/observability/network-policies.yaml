@@ -89,47 +89,12 @@ spec:
   policyTypes:
   - Ingress
   ingress:
+  # Workload labels drifted from the app.kubernetes.io/* names this policy was
+  # written for: the aggregator pods are only app=aggregator and the coordinator
+  # only app=coordinator, so every span export was silently dropped. The
+  # collector accepts OTLP only, so allow the namespace instead of chasing names.
   - from:
-    - podSelector:
-        matchLabels:
-          app.kubernetes.io/name: bnpb
-          app.kubernetes.io/part-of: bnpb
-    - podSelector:
-        matchLabels:
-          app.kubernetes.io/name: client-api
-          app.kubernetes.io/part-of: bnpb
-    - podSelector:
-        matchLabels:
-          app.kubernetes.io/name: auth
-          app.kubernetes.io/part-of: bnpb
-    - podSelector:
-        matchLabels:
-          app.kubernetes.io/name: bmkg
-          app.kubernetes.io/part-of: bnpb
-    - podSelector:
-        matchLabels:
-          app.kubernetes.io/name: pvmbg
-          app.kubernetes.io/part-of: bnpb
-    - podSelector:
-        matchLabels:
-          app.kubernetes.io/name: dashboard-updater
-          app.kubernetes.io/part-of: bnpb
-    - podSelector:
-        matchLabels:
-          app.kubernetes.io/name: notifier
-          app.kubernetes.io/part-of: bnpb
-    - podSelector:
-        matchLabels:
-          app.kubernetes.io/name: analytics-consumer
-          app.kubernetes.io/part-of: bnpb
-    - podSelector:
-        matchLabels:
-          app.kubernetes.io/name: satellite-processor
-          app.kubernetes.io/part-of: bnpb
-    - podSelector:
-        matchLabels:
-          app.kubernetes.io/name: field-report-consumer
-          app.kubernetes.io/part-of: bnpb
+    - podSelector: {}
     ports:
     - protocol: TCP
       port: 4318

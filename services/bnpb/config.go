@@ -28,7 +28,10 @@ type config struct {
 	PipelineURL              string
 	PipelineInternalToken    string
 	UpstreamTimeout          time.Duration
+	AuditTimeout             time.Duration
 	PollInterval             time.Duration
+	PVMBGBatchLimit          int
+	BMKGBatchLimit           int
 	StalenessThreshold       time.Duration
 	ReadCacheTTL             time.Duration
 
@@ -108,9 +111,21 @@ func loadConfig() (config, error) {
 	if err != nil || cfg.UpstreamTimeout <= 0 {
 		return cfg, fmt.Errorf("UPSTREAM_TIMEOUT must be a positive duration, such as 5s")
 	}
+	cfg.AuditTimeout, err = time.ParseDuration(env("AUDIT_TIMEOUT", "90s"))
+	if err != nil || cfg.AuditTimeout <= 0 {
+		return cfg, fmt.Errorf("AUDIT_TIMEOUT must be a positive duration, such as 90s")
+	}
 	cfg.PollInterval, err = time.ParseDuration(env("POLL_INTERVAL", "3s"))
 	if err != nil || cfg.PollInterval <= 0 {
 		return cfg, fmt.Errorf("POLL_INTERVAL must be a positive duration, such as 3s")
+	}
+	cfg.PVMBGBatchLimit, err = strconv.Atoi(env("PVMBG_BATCH_LIMIT", "100"))
+	if err != nil || cfg.PVMBGBatchLimit < 1 {
+		return cfg, fmt.Errorf("PVMBG_BATCH_LIMIT must be a positive integer")
+	}
+	cfg.BMKGBatchLimit, err = strconv.Atoi(env("BMKG_BATCH_LIMIT", "100"))
+	if err != nil || cfg.BMKGBatchLimit < 1 {
+		return cfg, fmt.Errorf("BMKG_BATCH_LIMIT must be a positive integer")
 	}
 	cfg.OutboxPollInterval, err = time.ParseDuration(env("OUTBOX_POLL_INTERVAL", "1s"))
 	if err != nil || cfg.OutboxPollInterval <= 0 {

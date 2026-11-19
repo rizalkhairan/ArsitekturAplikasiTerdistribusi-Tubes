@@ -34,6 +34,7 @@ type legacyEvent struct {
 
 type legacyMutation struct {
 	Version       int64           `json:"version"`
+	AutoVersion   bool            `json:"auto_version"`
 	Operation     string          `json:"operation"`
 	Authority     legacyAuthority `json:"authority"`
 	CorrelationID string          `json:"correlation_id"`
@@ -41,7 +42,9 @@ type legacyMutation struct {
 }
 
 type server struct {
-	store *canonical.Store
+	store     *canonical.Store
+	cache     *listCache
+	authority *authorityClient
 }
 
 func env(key, fallback string) string {
@@ -51,22 +54,50 @@ func env(key, fallback string) string {
 	return fallback
 }
 
+// openWithRetry waits for CoreDNS and the coordinator after a node reboot.
+// Exiting on the first dial error turns every cluster restart into a crashloop.
+func openWithRetry(dsn, topic string) (*canonical.Store, error) {
+	var last error
+	for attempt := 0; attempt < 20; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		store, err := canonical.Open(ctx, dsn, topic)
+		cancel()
+		if err == nil {
+			return store, nil
+		}
+		last = err
+		log.Printf("canonical storage not ready (attempt %d/20): %v", attempt+1, err)
+		time.Sleep(2 * time.Second)
+	}
+	return nil, last
+}
+
 func main() {
 	dsn := env("CANONICAL_DSN", "")
 	if dsn == "" {
 		log.Fatal("CANONICAL_DSN is required")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	store, err := canonical.Open(ctx, dsn, env("KAFKA_TOPIC_HAZARD_EVENTS", "hazard-events"))
+	store, err := openWithRetry(dsn, env("KAFKA_TOPIC_HAZARD_EVENTS", "hazard-events"))
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer store.DB.Close()
+	// Establish the Citus worker connections before the first request instead
+	// of charging their handshakes to the first caller after a restart.
+	go func() {
+		warmCtx, warmCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer warmCancel()
+		store.Warm(warmCtx)
+	}()
 	if os.Getenv("CANONICAL_REQUIRE_REPLICATION") == "false" {
 		store.RequireReplication = false
 	}
-	s := &server{store: store}
+	cacheTTL, err := time.ParseDuration(env("CANONICAL_LIST_CACHE_TTL", "15s"))
+	if err != nil || cacheTTL < 0 {
+		log.Fatal("CANONICAL_LIST_CACHE_TTL must be a non-negative duration")
+	}
+	authority := newAuthorityClient(env("AUTHORITY_URL", os.Getenv("COORDINATOR_URL")), os.Getenv("COORDINATOR_TOKEN"))
+	s := &server{store: store, cache: newListCache(cacheTTL), authority: authority}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 	mux.HandleFunc("GET /readyz", s.ready)
@@ -81,7 +112,7 @@ func main() {
 	mux.HandleFunc("GET /analytics", s.analyticsPage)
 	mux.HandleFunc("GET /internal/analytics/summary", s.analyticsSummary)
 	mux.HandleFunc("PUT /internal/canonical/events/{source}/{ref}", s.put)
-	mux.HandleFunc("PUT /internal/admin/events/{source}/{ref}", s.put)
+	mux.HandleFunc("PUT /internal/admin/events/{source}/{ref}", s.putAdmin)
 	addr := env("ADDR", ":8080")
 	log.Printf("canonical-api listening addr=%s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
@@ -101,7 +132,11 @@ func (s *server) ready(w http.ResponseWriter, r *http.Request) {
 func (s *server) list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	events, err := s.store.List(r.Context(), q.Get("source"), "", q.Get("since"), limit)
+	source, since := q.Get("source"), q.Get("since")
+	key := source + "\x00" + since + "\x00" + strconv.Itoa(limit)
+	events, err := s.cache.get(r.Context(), key, func(ctx context.Context) ([]canonical.Event, error) {
+		return s.store.List(ctx, source, "", since, limit)
+	})
 	if err != nil {
 		writeError(w, err)
 		return
@@ -140,7 +175,17 @@ func (s *server) getHazard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, event)
 }
 
+// putAdmin is the authenticated DLQ-recovery path. It keeps the legacy
+// authority handling; the normal path is fenced by the coordinator.
+func (s *server) putAdmin(w http.ResponseWriter, r *http.Request) {
+	s.putAuthorized(w, r, true)
+}
+
 func (s *server) put(w http.ResponseWriter, r *http.Request) {
+	s.putAuthorized(w, r, false)
+}
+
+func (s *server) putAuthorized(w http.ResponseWriter, r *http.Request, admin bool) {
 	source := r.PathValue("source")
 	ref := r.PathValue("ref")
 	var body legacyMutation
@@ -159,18 +204,40 @@ func (s *server) put(w http.ResponseWriter, r *http.Request) {
 	if epoch < 1 {
 		epoch = 1
 	}
-	// The legacy protocol does not have a separate authority service. Install
-	// the same fenced authority row before using the platform write path.
-	_ = s.store.InstallLease(r.Context(), canonical.Lease{
-		Authority: canonical.Authority{Partition: partition, Epoch: epoch},
-		Owner:     "legacy-canonical-store",
-		ExpiresAt: time.Now().Add(24 * time.Hour),
-	})
-	principal := canonical.Principal{Owner: "legacy-canonical-store", Assignments: map[string][]string{
+	if !admin && fencedSource(source) && s.authority != nil {
+		holder := r.Header.Get("X-Caller-Instance")
+		if holder == "" {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]string{"code": "fenced", "message": "writer identity is required"}})
+			return
+		}
+		if err := s.authority.Validate(r.Context(), source, holder, epoch); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]string{"code": "fenced", "message": err.Error()}})
+			return
+		}
+	}
+	owner := "legacy-canonical-store"
+	if admin {
+		// Replay presents the epoch the live writer installed, not a made-up 1.
+		if current, currentOwner, authErr := s.store.CurrentAuthority(r.Context(), partition); authErr == nil {
+			epoch, owner = current.Epoch, currentOwner
+		}
+	}
+	// The authority row records the epoch storage compares against. Install it
+	// only when it is missing or stale: Put re-checks the row under lock, so an
+	// unchanged row needs no second transaction on the per-write hot path.
+	if matches, err := s.store.AuthorityMatches(r.Context(), partition, epoch, owner); err != nil || !matches {
+		_ = s.store.InstallLease(r.Context(), canonical.Lease{
+			Authority: canonical.Authority{Partition: partition, Epoch: epoch},
+			Owner:     owner,
+			ExpiresAt: time.Now().Add(24 * time.Hour),
+		})
+	}
+	principal := canonical.Principal{Owner: owner, Assignments: map[string][]string{
 		partition: {source},
 	}}
 	mutation := canonical.Mutation{
 		Version:       body.Version,
+		AutoVersion:   admin || body.AutoVersion,
 		Operation:     body.Operation,
 		Authority:     canonical.Authority{Partition: partition, Epoch: epoch},
 		CorrelationID: body.CorrelationID,
@@ -195,6 +262,7 @@ func (s *server) put(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	s.cache.clear()
 	status := http.StatusOK
 	if result.Created {
 		status = http.StatusCreated
@@ -221,5 +289,8 @@ func writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"code": "not_found", "message": "not found"}})
 		return
 	}
+	// Without this line the 503 body hides the cause (statement or lock timeout,
+	// dial error) from everyone debugging the write path.
+	log.Printf("canonical-api: storage error: %v", err)
 	writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]string{"code": "storage_unavailable", "message": "canonical storage unavailable"}})
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -54,13 +55,29 @@ func Open(ctx context.Context, dsn, topic string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(8)
-	db.SetMaxIdleConns(4)
-	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetMaxIdleConns(8)
+	db.SetConnMaxLifetime(30 * time.Minute)
+	db.SetConnMaxIdleTime(10 * time.Minute)
 	if err = db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("open canonical PostgreSQL: %w", err)
 	}
 	return &Store{DB: db, Topic: topic, RequireReplication: true}, nil
+}
+
+// Warm opens the Citus worker connections for every pooled backend. The first
+// distributed query on a fresh connection pays a handshake per worker, which
+// turns the first reads after a restart into multi-second requests.
+func (s *Store) Warm(ctx context.Context) {
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = s.DB.ExecContext(ctx, `SELECT count(*) FROM canonical.events`)
+		}()
+	}
+	wg.Wait()
 }
 
 // The returned policy belongs to this transaction, never mutable Store state.
@@ -94,6 +111,36 @@ func (s *Store) begin(ctx context.Context) (*sql.Tx, string, error) {
 		return nil, "", err
 	}
 	return tx, durability, nil
+}
+
+// AuthorityMatches reports whether the durable row already fences for this
+// epoch and owner and has not expired. The normal write path uses it to skip
+// the ownership transaction: Put re-checks the same row under lock, so a stale
+// or missing row is still rejected, but the common case costs one read instead
+// of a second write transaction holding the partition lock.
+func (s *Store) AuthorityMatches(ctx context.Context, partition string, epoch int64, owner string) (bool, error) {
+	// Require an hour of headroom so a long-lived holder refreshes the row well
+	// before expiry; an already-expired row cannot be renewed at the same epoch.
+	var matches bool
+	err := s.DB.QueryRowContext(ctx, `SELECT epoch=$2 AND owner=$3 AND expires_at > clock_timestamp() + interval '1 hour'
+		FROM canonical.authorities WHERE partition=$1`, partition, epoch, owner).Scan(&matches)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return matches, err
+}
+
+// CurrentAuthority returns the durable authority row for a partition. Replay
+// paths use it to present the same epoch as the live writer instead of
+// inventing an epoch that storage will reject.
+func (s *Store) CurrentAuthority(ctx context.Context, partition string) (Authority, string, error) {
+	var epoch int64
+	var owner string
+	err := s.DB.QueryRowContext(ctx, `SELECT epoch,owner FROM canonical.authorities WHERE partition=$1`, partition).Scan(&epoch, &owner)
+	if err != nil {
+		return Authority{}, "", err
+	}
+	return Authority{Partition: partition, Epoch: epoch}, owner, nil
 }
 
 func (s *Store) InstallLease(ctx context.Context, lease Lease) error {
@@ -187,6 +234,7 @@ func (s *Store) mutate(ctx context.Context, tx *sql.Tx, durability, source, ref 
 	if err != nil && !created {
 		return Result{}, err
 	}
+	version := m.Version
 	if !created {
 		if partition != m.Authority.Partition {
 			return Result{}, conflict("partition_conflict")
@@ -194,17 +242,26 @@ func (s *Store) mutate(ctx context.Context, tx *sql.Tx, durability, source, ref 
 		if err = json.Unmarshal(raw, &event); err != nil {
 			return Result{}, err
 		}
-		if m.Version < oldVersion {
-			return Result{}, conflict("stale_version")
-		}
-		if m.Version == oldVersion {
-			if digest != oldDigest {
-				return Result{}, conflict("version_conflict")
+		if m.AutoVersion {
+			if digest == oldDigest {
+				// Identical replay: confirm and acknowledge without a new version.
+				_, err = tx.ExecContext(ctx, `UPDATE canonical.events SET confirmed_at=statement_timestamp() WHERE event_key=$1`, key)
+				return Result{event.HazardID, oldVersion, m.Operation, true, durability, false}, err
 			}
-			// A timed-out COMMIT may be visible before its standby flush. Force
-			// another WAL record on this shard before acknowledging any replay.
-			_, err = tx.ExecContext(ctx, `UPDATE canonical.events SET confirmed_at=statement_timestamp() WHERE event_key=$1`, key)
-			return Result{event.HazardID, m.Version, m.Operation, true, durability, false}, err
+			version = oldVersion + 1
+		} else {
+			if m.Version < oldVersion {
+				return Result{}, conflict("stale_version")
+			}
+			if m.Version == oldVersion {
+				if digest != oldDigest {
+					return Result{}, conflict("version_conflict")
+				}
+				// A timed-out COMMIT may be visible before its standby flush. Force
+				// another WAL record on this shard before acknowledging any replay.
+				_, err = tx.ExecContext(ctx, `UPDATE canonical.events SET confirmed_at=statement_timestamp() WHERE event_key=$1`, key)
+				return Result{event.HazardID, m.Version, m.Operation, true, durability, false}, err
+			}
 		}
 	} else {
 		id, err := uuid.NewV7()
@@ -232,25 +289,25 @@ func (s *Store) mutate(ctx context.Context, tx *sql.Tx, durability, source, ref 
 	_, err = tx.ExecContext(ctx, `INSERT INTO canonical.events(event_key,hazard_id,source,source_ref_id,version,operation,digest,event,ingested_at,partition)
 	 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 	 ON CONFLICT(event_key) DO UPDATE SET version=excluded.version,operation=excluded.operation,
-	 digest=excluded.digest,event=excluded.event,confirmed_at=excluded.confirmed_at`, key, event.HazardID, source, ref, m.Version, m.Operation, digest, string(raw), event.IngestedAt, m.Authority.Partition)
+	 digest=excluded.digest,event=excluded.event,confirmed_at=excluded.confirmed_at`, key, event.HazardID, source, ref, version, m.Operation, digest, string(raw), event.IngestedAt, m.Authority.Partition)
 	if err != nil {
 		return Result{}, err
 	}
-	eventID := hash([]any{key, m.Version})
+	eventID := hash([]any{key, version})
 	payload := map[string]any{}
 	if err = json.Unmarshal(raw, &payload); err != nil {
 		return Result{}, err
 	}
-	payload["event_id"], payload["version"], payload["operation"], payload["correlation_id"] = eventID, m.Version, m.Operation, m.CorrelationID
+	payload["event_id"], payload["version"], payload["operation"], payload["correlation_id"] = eventID, version, m.Operation, m.CorrelationID
 	message, err := json.Marshal(payload)
 	if err != nil {
 		return Result{}, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO canonical.outbox(event_key,version,event_id,hazard_id,correlation_id,topic,payload) VALUES($1,$2,$3,$4,$5,$6,$7)`, key, m.Version, eventID, event.HazardID, m.CorrelationID, s.Topic, string(message))
+	_, err = tx.ExecContext(ctx, `INSERT INTO canonical.outbox(event_key,version,event_id,hazard_id,correlation_id,topic,payload) VALUES($1,$2,$3,$4,$5,$6,$7)`, key, version, eventID, event.HazardID, m.CorrelationID, s.Topic, string(message))
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{event.HazardID, m.Version, m.Operation, false, durability, created}, nil
+	return Result{event.HazardID, version, m.Operation, false, durability, created}, nil
 }
 
 type WindowItem struct {

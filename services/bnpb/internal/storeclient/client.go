@@ -28,6 +28,7 @@ type Client struct {
 	token    string
 	instance string
 	http     *http.Client
+	audit    *http.Client
 }
 
 func New(baseURL, token, instance string, timeout time.Duration) *Client {
@@ -47,7 +48,40 @@ func New(baseURL, token, instance string, timeout time.Duration) *Client {
 	}
 }
 
+// SetAuditTimeout gives the audit reads their own budget. They traverse the
+// whole table, so the upstream request timeout that suits a hazard read is too
+// short for a checksum.
+func (c *Client) SetAuditTimeout(timeout time.Duration) {
+	if timeout <= 0 {
+		timeout = 90 * time.Second
+	}
+	c.audit = &http.Client{Timeout: timeout, Transport: c.http.Transport, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+}
+
+func (c *Client) auditClient() *http.Client {
+	if c.audit != nil {
+		return c.audit
+	}
+	return c.http
+}
+
+// ErrVersionConflict means another payload already occupies this version.
+var ErrVersionConflict = errors.New("canonical version conflict")
+
 func (c *Client) Upsert(ctx context.Context, event database.HazardEvent, version, epoch int64, scope string) (created, ignored bool, err error) {
+	return c.upsert(ctx, event, version, epoch, scope, false)
+}
+
+// UpsertAuto lets storage choose the next version under its row lock. A
+// retried batch whose payload changed then resolves as an update instead of
+// livelocking on version_conflict.
+func (c *Client) UpsertAuto(ctx context.Context, event database.HazardEvent, version, epoch int64, scope string) (created, ignored bool, err error) {
+	return c.upsert(ctx, event, version, epoch, scope, true)
+}
+
+func (c *Client) upsert(ctx context.Context, event database.HazardEvent, version, epoch int64, scope string, auto bool) (created, ignored bool, err error) {
 	eventBody := map[string]any{
 		"hazard_id": event.HazardID, "hazard_type": event.HazardType,
 		"severity": event.Severity, "area_name": event.AreaName,
@@ -64,6 +98,9 @@ func (c *Client) Upsert(ctx context.Context, event database.HazardEvent, version
 		"correlation_id": obs.CorrelationID(ctx),
 		"event":          eventBody,
 	}
+	if auto {
+		body["auto_version"] = true
+	}
 	path := "/internal/canonical/events/" + url.PathEscape(event.Source) + "/" + url.PathEscape(event.SourceRefID)
 	var response struct {
 		HazardID string `json:"hazard_id"`
@@ -76,6 +113,9 @@ func (c *Client) Upsert(ctx context.Context, event database.HazardEvent, version
 		if errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict {
 			if apiErr.Code == "stale_version" {
 				return false, false, ErrStaleVersion
+			}
+			if apiErr.Code == "version_conflict" {
+				return false, false, ErrVersionConflict
 			}
 			return false, false, ErrFenced
 		}
@@ -143,7 +183,7 @@ func (c *Client) AuditEvents(ctx context.Context, source, since string, limit in
 		query.Set("cursor", cursor)
 	}
 	var response map[string]any
-	err := c.do(ctx, http.MethodGet, "/internal/audit/events?"+query.Encode(), nil, &response)
+	_, err := c.doStatusWith(ctx, c.auditClient(), http.MethodGet, "/internal/audit/events?"+query.Encode(), nil, &response)
 	return response, err
 }
 
@@ -180,7 +220,7 @@ func (c *Client) Checksum(ctx context.Context, source string, partial bool) (map
 		query.Set("partial", "true")
 	}
 	var response map[string]any
-	err := c.do(ctx, http.MethodGet, "/internal/audit/checksum?"+query.Encode(), nil, &response)
+	_, err := c.doStatusWith(ctx, c.auditClient(), http.MethodGet, "/internal/audit/checksum?"+query.Encode(), nil, &response)
 	return response, err
 }
 
@@ -188,7 +228,7 @@ func (c *Client) Location(ctx context.Context, hazardID string) (map[string]any,
 	query := url.Values{}
 	query.Set("hazard_id", hazardID)
 	var response map[string]any
-	err := c.do(ctx, http.MethodGet, "/internal/audit/location?"+query.Encode(), nil, &response)
+	_, err := c.doStatusWith(ctx, c.auditClient(), http.MethodGet, "/internal/audit/location?"+query.Encode(), nil, &response)
 	return response, err
 }
 
@@ -212,6 +252,10 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 }
 
 func (c *Client) doStatus(ctx context.Context, method, path string, body, out any) (int, error) {
+	return c.doStatusWith(ctx, c.http, method, path, body, out)
+}
+
+func (c *Client) doStatusWith(ctx context.Context, client *http.Client, method, path string, body, out any) (int, error) {
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -232,7 +276,7 @@ func (c *Client) doStatus(ctx context.Context, method, path string, body, out an
 	}
 	req.Header.Set("X-Caller-Instance", c.instance)
 	obs.InjectHeaders(ctx, req.Header)
-	resp, err := c.http.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("storage request: %w", err)
 	}

@@ -49,9 +49,12 @@ spec:
         command: ["/app/canonical-api"]
         envFrom:
         - configMapRef: {name: citus-node-map, optional: true}
+        - configMapRef: {name: bnpb-config, optional: true}
         env:
         - name: CANONICAL_DSN
           valueFrom: {secretKeyRef: {name: bnpb-citus-api, key: CANONICAL_DSN}}
+        - name: COORDINATOR_TOKEN
+          valueFrom: {secretKeyRef: {name: bnpb-secrets, key: COORDINATOR_TOKEN}}
         - {name: ADDR, value: ":8080"}
         - {name: KAFKA_TOPIC_HAZARD_EVENTS, value: hazard-events}
         ports: [{name: http, containerPort: 8080}]

@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 )
 
 type fakeShards struct {
@@ -21,6 +21,8 @@ type fakeShards struct {
 	active, peak int
 	changed      bool
 	calls        int
+	all          []copyRow
+	allOK        bool
 }
 
 func fixtureShards() *fakeShards {
@@ -51,6 +53,35 @@ func (f *fakeShards) readUnit(ctx context.Context, u unit, _ Query) ([]copyRow, 
 		return nil, ctx.Err()
 	}
 	return f.rows[u.ID], nil
+}
+func (f *fakeShards) readAllPage(_ context.Context, _ Query, pos *cursorPos, limit int) ([]copyRow, error) {
+	if !f.allOK {
+		return nil, errors.New("distributed read unsupported")
+	}
+	rows := append([]copyRow(nil), f.all...)
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].Event.IngestedAt.Equal(rows[j].Event.IngestedAt) {
+			return rows[i].Event.HazardID < rows[j].Event.HazardID
+		}
+		return rows[i].Event.IngestedAt.Before(rows[j].Event.IngestedAt)
+	})
+	out := []copyRow{}
+	for _, row := range rows {
+		if pos == nil || row.Event.IngestedAt.After(pos.At) ||
+			(row.Event.IngestedAt.Equal(pos.At) && row.Event.HazardID > pos.ID) {
+			out = append(out, row)
+		}
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+func (f *fakeShards) readAll(context.Context, Query) ([]copyRow, error) {
+	if !f.allOK {
+		return nil, errors.New("distributed read unsupported")
+	}
+	return f.all, nil
 }
 func row(id string, version int64, operation string) copyRow {
 	return copyRow{version, operation, Event{HazardID: id, Source: "SATELIT", SourceRefID: id, IngestedAt: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), Attributes: map[string]any{}}}
@@ -96,7 +127,7 @@ func TestGatherTimeoutCoverageAndRecovery(t *testing.T) {
 	if err != nil || len(events) != 1 || !reflect.DeepEqual(missing, []string{"shard-2"}) {
 		t.Fatalf("partial: %+v %v %v", events, missing, err)
 	}
-	if time.Since(start) > time.Second || f.peak > readWorkers {
+	if time.Since(start) > 2*unitTimeout || f.peak > readWorkers {
 		t.Fatalf("unbounded read: %v, peak %d", time.Since(start), f.peak)
 	}
 	f.fail[2] = false
@@ -128,12 +159,56 @@ func TestGatherConcurrencyAndExactSourceIdentity(t *testing.T) {
 	f.rows[1] = []copyRow{a}
 	f.rows[8] = []copyRow{b}
 	events, missing, err := gather(context.Background(), f, Query{})
-	if err != nil || len(missing) != 0 || len(events) != 2 || f.peak != readWorkers {
+	if err != nil || len(missing) != 0 || len(events) != 2 || f.peak != len(f.units) {
 		t.Fatalf("concurrency/source identity: events=%d peak=%d %v %v", len(events), f.peak, missing, err)
 	}
 	events = selectEvents(events, Query{})
 	if events[0].HazardID != "a" || events[1].HazardID != "b" {
 		t.Fatal("equal instants did not use ID tie-breaker")
+	}
+}
+
+// The distributed fast path must produce the same fold as the per-shard walk
+// and must not touch shard metadata when it succeeds.
+func TestGatherDistributedFastPath(t *testing.T) {
+	f := fixtureShards()
+	f.allOK = true
+	f.all = []copyRow{row("a", 1, "upsert"), row("b", 2, "upsert"), row("gone", 1, "upsert"), row("gone", 2, "retract")}
+	events, missing, err := gather(context.Background(), f, Query{})
+	if err != nil || len(missing) != 0 || len(events) != 2 {
+		t.Fatalf("distributed read: events=%d missing=%v err=%v", len(events), missing, err)
+	}
+	if f.calls != 0 {
+		t.Fatalf("fast path read shard metadata %d times", f.calls)
+	}
+}
+
+// A page reads only the rows after the cursor, and the extra row tells the
+// caller that another page exists.
+func TestGatherPageKeysetPagination(t *testing.T) {
+	f := fixtureShards()
+	f.allOK = true
+	base := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	mk := func(id string, minute int) copyRow {
+		r := row(id, 1, "upsert")
+		r.Event.IngestedAt = base.Add(time.Duration(minute) * time.Minute)
+		return r
+	}
+	f.all = []copyRow{mk("a", 1), mk("b", 2), mk("c", 3)}
+
+	first, _, err := gatherPage(context.Background(), f, Query{Limit: 2}, nil)
+	if err != nil || len(first) != 3 {
+		t.Fatalf("first page should carry one lookahead row: %d %v", len(first), err)
+	}
+	pos := cursorPos{At: first[1].IngestedAt, ID: first[1].HazardID}
+	next, _, err := gatherPage(context.Background(), f, Query{Limit: 2}, &pos)
+	if err != nil || len(next) != 1 || next[0].HazardID != "c" {
+		t.Fatalf("second page: %v %v", next, err)
+	}
+	encoded := encodeCursor(first[1])
+	decoded, err := decodeCursor(encoded)
+	if err != nil || !decoded.At.Equal(pos.At) || decoded.ID != "b" {
+		t.Fatalf("cursor round trip: %+v %v", decoded, err)
 	}
 }
 
@@ -154,40 +229,18 @@ func TestGatherRejectsUnknownCoverageAndCaps(t *testing.T) {
 	requireCode(t, err, "snapshot_too_large")
 }
 
-func TestSnapshotPaginationFrozenCoverageAndCursorValidation(t *testing.T) {
-	snap := snapshot{ID: uuid.NewString(), Secret: []byte("a snapshot-specific secret"), Query: Query{Source: "SATELIT"}, Items: []Event{row("a", 1, "upsert").Event, row("b", 1, "upsert").Event, row("c", 1, "upsert").Event}, Missing: []string{"shard-2"}, Expires: time.Now().Add(time.Minute)}
-	q := Query{Source: "SATELIT", Limit: 1}
-	p, err := snap.page(q, 0)
-	if err != nil || p.NextCursor == nil || !p.Partial {
-		t.Fatalf("page one: %+v %v", p, err)
+func TestCursorValidation(t *testing.T) {
+	for _, cursor := range []string{"garbage", strings.Repeat("a", 513)} {
+		if _, err := decodeCursor(cursor); err == nil {
+			t.Fatal("invalid cursor accepted")
+		}
 	}
-	q.Cursor = *p.NextCursor
-	id, offset, err := decodeCursor(q.Cursor)
-	if err != nil || id != snap.ID || offset != 1 {
-		t.Fatal(id, offset, err)
+	event := row("a", 1, "upsert").Event
+	cluster := event.IngestedAt.Add(90 * time.Minute)
+	decoded, err := decodeCursor(encodeCursor(Event{IngestedAt: cluster, HazardID: "hz-1"}))
+	if err != nil || !decoded.At.Equal(cluster) || decoded.ID != "hz-1" {
+		t.Fatalf("cursor round trip: %+v %v", decoded, err)
 	}
-	q.Limit = 2
-	p, err = snap.page(q, offset)
-	if err != nil || p.NextCursor != nil || len(p.Items) != 2 || !p.Partial || !reflect.DeepEqual(p.UnavailableUnits, snap.Missing) {
-		t.Fatalf("final partial page: %+v %v", p, err)
-	}
-	replay, err := snap.page(q, offset)
-	if err != nil || !reflect.DeepEqual(p, replay) {
-		t.Fatal("cursor replay changed")
-	}
-	_, err = snap.page(q, 2)
-	if err == nil {
-		t.Fatal("forged offset accepted")
-	}
-	q.Source = "BMKG"
-	_, err = snap.page(q, offset)
-	if err == nil {
-		t.Fatal("changed filter accepted")
-	}
-	q.Source = "SATELIT"
-	snap.Expires = time.Now().Add(-time.Second)
-	_, err = snap.page(q, offset)
-	requireCode(t, err, "cursor_expired")
 }
 
 func TestQueryValidationAndInclusiveIngestionFilter(t *testing.T) {
@@ -204,8 +257,8 @@ func TestQueryValidationAndInclusiveIngestionFilter(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatal("inclusive ingestion bound rejected")
 	}
-	for _, cursor := range []string{"garbage", strings.Repeat("a", 257)} {
-		if _, _, err := decodeCursor(cursor); err == nil {
+	for _, cursor := range []string{"garbage", strings.Repeat("a", 513)} {
+		if _, err := decodeCursor(cursor); err == nil {
 			t.Fatal("invalid cursor accepted")
 		}
 	}

@@ -2,21 +2,15 @@ package canonical
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 )
 
 const (
@@ -58,6 +52,11 @@ type copyRow struct {
 type shardReader interface {
 	inventory(context.Context) ([]unit, error)
 	readUnit(context.Context, unit, Query) ([]copyRow, error)
+	// readAllPage serves one page through a single Citus query, ordered by
+	// (ingested_at, hazard_id) and bounded by the keyset position.
+	readAllPage(context.Context, Query, *cursorPos, int) ([]copyRow, error)
+	// readAll is the unbounded variant used by full traversals.
+	readAll(context.Context, Query) ([]copyRow, error)
 }
 
 func storageError(code, message string) error { return &Error{503, code, message} }
@@ -87,6 +86,14 @@ func (q *Query) validate() error {
 func gather(ctx context.Context, reader shardReader, q Query) ([]Event, []string, error) {
 	ctx, cancel := context.WithTimeout(ctx, readTimeout)
 	defer cancel()
+	// Fast path: one distributed query. Citus fails the whole query when a
+	// placement is unreachable, so success means every shard answered.
+	if rows, fastErr := reader.readAll(ctx, q); fastErr == nil {
+		events, mergeErr := mergeRows(rows)
+		return events, nil, mergeErr
+	} else {
+		log.Printf("canonical distributed read unavailable (%v); falling back to per-shard traversal", fastErr)
+	}
 	units, err := reader.inventory(ctx)
 	if err != nil {
 		log.Printf("canonical inventory before traversal: %v", err)
@@ -126,12 +133,7 @@ func gather(ctx context.Context, reader shardReader, q Query) ([]Event, []string
 	go func() { workers.Wait(); close(results) }()
 	missing := []string{}
 	seenUnits := make(map[int]bool)
-	byIdentity := map[string]copyRow{}
-	type versionKey struct {
-		identity string
-		version  int64
-	}
-	digests := map[versionKey]string{}
+	collected := []copyRow{}
 	bytes := 0
 	for result := range results {
 		seenUnits[result.index] = true
@@ -148,23 +150,7 @@ func gather(ctx context.Context, reader shardReader, q Query) ([]Event, []string
 			if bytes > maxReadBytes {
 				return nil, nil, storageError("snapshot_too_large", "read exceeds 16 MiB; narrow source/since")
 			}
-			key := Key(row.Event.Source, row.Event.SourceRefID)
-			old, exists := byIdentity[key]
-			if row.Version < 1 || (row.Operation != "upsert" && row.Operation != "retract") || row.Event.HazardID == "" {
-				return nil, nil, storageError("inconsistent_copies", "invalid stored event")
-			}
-			if exists && (old.Event.HazardID != row.Event.HazardID || !old.Event.IngestedAt.Equal(row.Event.IngestedAt)) {
-				return nil, nil, storageError("inconsistent_copies", "copies disagree on immutable identity")
-			}
-			vk := versionKey{key, row.Version}
-			digest := hash(row)
-			if previous, seen := digests[vk]; seen && previous != digest {
-				return nil, nil, storageError("inconsistent_copies", "copies disagree at the same version")
-			}
-			digests[vk] = digest
-			if !exists || row.Version > old.Version {
-				byIdentity[key] = row
-			}
+			collected = append(collected, row)
 		}
 	}
 	for i, u := range units {
@@ -183,19 +169,56 @@ func gather(ctx context.Context, reader shardReader, q Query) ([]Event, []string
 		log.Printf("canonical inventory changed before=%v after=%v", units, after)
 		return nil, nil, storageError("coverage_changed", "shard inventory changed or could not be verified; retry a fresh traversal")
 	}
+	events, err := mergeRows(collected)
+	if err != nil {
+		return nil, nil, err
+	}
+	sort.Strings(missing)
+	return events, missing, nil
+}
+
+type versionKey struct {
+	identity string
+	version  int64
+}
+
+// mergeRows folds one row per identity, keeping the highest version and
+// rejecting copies that disagree about immutable fields. Retracted identities
+// are dropped from the result but stay visible in storage.
+func mergeRows(rows []copyRow) ([]Event, error) {
+	byIdentity := map[string]copyRow{}
+	digests := map[versionKey]string{}
+	for _, row := range rows {
+		if row.Version < 1 || (row.Operation != "upsert" && row.Operation != "retract") || row.Event.HazardID == "" {
+			return nil, storageError("inconsistent_copies", "invalid stored event")
+		}
+		key := Key(row.Event.Source, row.Event.SourceRefID)
+		old, exists := byIdentity[key]
+		if exists && (old.Event.HazardID != row.Event.HazardID || !old.Event.IngestedAt.Equal(row.Event.IngestedAt)) {
+			return nil, storageError("inconsistent_copies", "copies disagree on immutable identity")
+		}
+		vk := versionKey{key, row.Version}
+		digest := hash(row)
+		if previous, seen := digests[vk]; seen && previous != digest {
+			return nil, storageError("inconsistent_copies", "copies disagree at the same version")
+		}
+		digests[vk] = digest
+		if !exists || row.Version > old.Version {
+			byIdentity[key] = row
+		}
+	}
 	events := []Event{}
 	ids := map[string]bool{}
 	for _, row := range byIdentity {
 		if ids[row.Event.HazardID] {
-			return nil, nil, storageError("inconsistent_copies", "hazard ID belongs to multiple identities")
+			return nil, storageError("inconsistent_copies", "hazard ID belongs to multiple identities")
 		}
 		ids[row.Event.HazardID] = true
 		if row.Operation == "upsert" {
 			events = append(events, row.Event)
 		}
 	}
-	sort.Strings(missing)
-	return events, missing, nil
+	return events, nil
 }
 
 func validInventory(units []unit) bool {
@@ -245,69 +268,74 @@ func selectEvents(events []Event, q Query) []Event {
 	return selected
 }
 
-type snapshot struct {
-	ID      string
-	Secret  []byte
-	Query   Query
-	Items   []Event
-	Missing []string
-	Expires time.Time
+type cursorPos struct {
+	At time.Time
+	ID string
 }
 
-// The MAC prevents caller-chosen offsets; the secret is shared through the
-// coordinator, so any Aggregator replica can serve and replay a cursor.
-func (s snapshot) cursor(offset int) string {
-	value := s.ID + "." + strconv.Itoa(offset) + "." + strconv.FormatInt(s.Expires.Unix(), 10)
-	mac := hmac.New(sha256.New, s.Secret)
-	mac.Write([]byte(value))
-	return base64.RawURLEncoding.EncodeToString([]byte(value + "." + hex.EncodeToString(mac.Sum(nil))))
+// Cursors are keyset positions, not snapshot offsets: a page reads only the
+// rows after the previous page, so paging never materialises the whole table.
+func encodeCursor(event Event) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(event.IngestedAt.UTC().Format(time.RFC3339Nano) + "\x00" + event.HazardID))
 }
-func decodeCursor(cursor string) (string, int, error) {
-	if len(cursor) > 256 {
-		return "", 0, invalid("invalid cursor")
+
+func decodeCursor(cursor string) (cursorPos, error) {
+	if len(cursor) > 512 {
+		return cursorPos{}, invalid("invalid cursor")
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(cursor)
-	parts := strings.Split(string(raw), ".")
-	if err != nil || len(parts) != 4 {
-		return "", 0, invalid("invalid cursor")
-	}
-	id, err := uuid.Parse(parts[0])
 	if err != nil {
-		return "", 0, invalid("invalid cursor")
+		return cursorPos{}, invalid("invalid cursor")
 	}
-	offset, err := strconv.Atoi(parts[1])
-	if err != nil || offset < 1 {
-		return "", 0, invalid("invalid cursor")
+	parts := strings.SplitN(string(raw), "\x00", 2)
+	if len(parts) != 2 || parts[1] == "" {
+		return cursorPos{}, invalid("invalid cursor")
 	}
-	expires, err := strconv.ParseInt(parts[2], 10, 64)
-	if err != nil || expires < 1 {
-		return "", 0, invalid("invalid cursor")
+	at, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return cursorPos{}, invalid("invalid cursor")
 	}
-	if time.Now().Unix() >= expires {
-		return "", 0, &Error{400, "cursor_expired", "snapshot expired; start a fresh traversal"}
-	}
-	return id.String(), offset, nil
+	return cursorPos{At: at, ID: parts[1]}, nil
 }
-func (s snapshot) page(q Query, offset int) (Page, error) {
-	if !time.Now().Before(s.Expires) {
-		return Page{}, &Error{400, "cursor_expired", "snapshot expired; start a fresh traversal"}
+
+func afterCursor(event Event, pos *cursorPos) bool {
+	if pos == nil {
+		return true
 	}
-	if q.Source != s.Query.Source || q.Since != s.Query.Since {
-		return Page{}, invalid("cursor filters differ from snapshot")
+	if event.IngestedAt.After(pos.At) {
+		return true
 	}
-	if offset > len(s.Items) || (offset > 0 && !hmac.Equal([]byte(q.Cursor), []byte(s.cursor(offset)))) {
-		return Page{}, invalid("invalid cursor")
+	return event.IngestedAt.Equal(pos.At) && event.HazardID > pos.ID
+}
+
+// gatherPage returns at most q.Limit+1 events after pos. The extra row tells
+// the caller whether another page exists.
+func gatherPage(ctx context.Context, reader shardReader, q Query, pos *cursorPos) ([]Event, []string, error) {
+	ctx, cancel := context.WithTimeout(ctx, readTimeout)
+	defer cancel()
+	if rows, fastErr := reader.readAllPage(ctx, q, pos, q.Limit+1); fastErr == nil {
+		events, mergeErr := mergeRows(rows)
+		if mergeErr != nil {
+			return nil, nil, mergeErr
+		}
+		return selectEvents(events, q), nil, nil
+	} else {
+		log.Printf("canonical distributed read unavailable (%v); falling back to per-shard traversal", fastErr)
 	}
-	end := offset + q.Limit
-	if end > len(s.Items) {
-		end = len(s.Items)
+	events, missing, err := gather(ctx, reader, q)
+	if err != nil {
+		return nil, nil, err
 	}
-	page := Page{Items: s.Items[offset:end], Partial: len(s.Missing) > 0, UnavailableUnits: s.Missing}
-	if end < len(s.Items) {
-		cursor := s.cursor(end)
-		page.NextCursor = &cursor
+	remaining := []Event{}
+	for _, event := range selectEvents(events, q) {
+		if afterCursor(event, pos) {
+			remaining = append(remaining, event)
+		}
 	}
-	return page, nil
+	if len(remaining) > q.Limit+1 {
+		remaining = remaining[:q.Limit+1]
+	}
+	return remaining, missing, nil
 }
 
 func (s *Store) Query(ctx context.Context, q Query) (Page, error) {
@@ -316,29 +344,27 @@ func (s *Store) Query(ctx context.Context, q Query) (Page, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	var pos *cursorPos
 	if q.Cursor != "" {
-		id, offset, err := decodeCursor(q.Cursor)
+		decoded, err := decodeCursor(q.Cursor)
 		if err != nil {
 			return Page{}, err
 		}
-		snap, err := s.loadSnapshot(ctx, id)
-		if err != nil {
-			return Page{}, err
-		}
-		return snap.page(q, offset)
+		pos = &decoded
 	}
-	events, missing, err := gather(ctx, s, q)
+	events, missing, err := gatherPage(ctx, s, q, pos)
 	if err != nil {
 		return Page{}, err
 	}
-	snap := snapshot{ID: uuid.NewString(), Secret: make([]byte, 32), Query: q, Items: selectEvents(events, q), Missing: missing, Expires: time.Now().Add(snapshotTTL)}
-	if _, err = rand.Read(snap.Secret); err != nil {
-		return Page{}, err
+	page := Page{Items: []Event{}, Partial: len(missing) > 0, UnavailableUnits: missing}
+	if len(events) > q.Limit {
+		events = events[:q.Limit]
+		next := encodeCursor(events[len(events)-1])
+		page.NextCursor = &next
 	}
-	if len(snap.Items) > q.Limit {
-		if err = s.saveSnapshot(ctx, snap); err != nil {
-			return Page{}, err
-		}
+	page.Items = events
+	if page.UnavailableUnits == nil {
+		page.UnavailableUnits = []string{}
 	}
-	return snap.page(q, 0)
+	return page, nil
 }

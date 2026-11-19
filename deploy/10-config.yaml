@@ -16,10 +16,17 @@ data:
   AUTH_SERVICE_URL: http://auth:8000
 
   POLL_INTERVAL: 3s
-  UPSTREAM_TIMEOUT: 4s
+  # Persist at most this many reports per tick so a large backlog still
+  # advances the checkpoint between transient write failures.
+  PVMBG_BATCH_LIMIT: "100"
+  BMKG_BATCH_LIMIT: "100"
+  # Canonical writes serialize on the partition authority row; 4s timed out
+  # under node load before the redundant lease transaction was removed.
+  UPSTREAM_TIMEOUT: 15s
+  AUDIT_TIMEOUT: 90s
   UPSTREAM_RETRIES: "1"
   STALENESS_THRESHOLD: 10s
-  READ_CACHE_TTL: 10s
+  READ_CACHE_TTL: 30s
   LEASE_TTL: 15s
   LEASE_RENEW_INTERVAL: 5s
   LEASE_SAFETY_MARGIN: 2s
@@ -31,7 +38,9 @@ data:
 
   SENSOR_POLL_INTERVAL: 2s
   SENSOR_TIMEOUT: 3s
-  SENSOR_STALE_AFTER: 45s
+  # A buoy may legitimately be silent between bursts; 45s tripped the breaker
+  # while the sensor was healthy. Failures and slowness still trip it sooner.
+  SENSOR_STALE_AFTER: 180s
   SENSOR_PAGE_LIMIT: "100"
   SENSOR_MAX_PAGES: "20"
   SENSOR_CURSOR_OVERLAP: 5m
@@ -51,4 +60,6 @@ data:
   RESERVED_FIELD_CAPACITY: "80"
   MAX_LIMIT: "100"
   TOKEN_TTL_SECONDS: "60"
-  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  # Spans are exported to the collector's OTLP/HTTP receiver; the collector
+  # forwards them to Tempo. Empty disables export.
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"

@@ -90,7 +90,7 @@ func NewServer(addr string, db, writeDB *sql.DB, topic, internalKey string, regi
 		Addr:         addr,
 		Handler:      handler,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: 120 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 	return s
@@ -175,6 +175,20 @@ func (s *Server) SetReadCacheTTL(ttl time.Duration) {
 	if ttl >= 0 {
 		s.cacheTTL = ttl
 	}
+}
+
+// WarmReadCache fills the common list keys after startup. The store remains
+// authoritative, but a newly started Aggregator no longer turns its first
+// callers into the slow Citus query.
+func (s *Server) WarmReadCache() {
+	if s.store == nil || s.cacheTTL <= 0 {
+		return
+	}
+	go func() {
+		for _, limit := range []int{20, 50, 100} {
+			_, _ = s.listEvents(context.Background(), "", "", "", limit)
+		}
+	}()
 }
 
 // SetSensorFallback installs the last-known-good snapshot for storage outages.
@@ -357,14 +371,10 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		writeContractError(w, http.StatusServiceUnavailable, "draining", "instance is draining")
 		return
 	}
-	if s.store != nil {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-		if err := s.store.Ready(ctx); err != nil {
-			writeContractError(w, http.StatusServiceUnavailable, "storage_unavailable", err.Error())
-			return
-		}
-	}
+	// Storage is deliberately not part of readiness: a slow or unreachable
+	// store must still receive requests so the handler can answer with a
+	// partial page or an explicit availability marker. Taking every replica
+	// out of the Service turns a storage outage into a total outage.
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
@@ -438,12 +448,12 @@ func (s *Server) handleAuditEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	response, err := s.store.AuditEvents(ctx, r.URL.Query().Get("source"), r.URL.Query().Get("since"),
 		limit, r.URL.Query().Get("cursor"))
 	if err != nil {
-		writeContractError(w, http.StatusServiceUnavailable, "storage_unavailable", err.Error())
+		writeUpstreamError(w, err, "storage_unavailable")
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -454,11 +464,11 @@ func (s *Server) handleAuditChecksum(w http.ResponseWriter, r *http.Request) {
 		writeContractError(w, http.StatusServiceUnavailable, "storage_unavailable", "storage is not configured")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	checksum, err := s.store.Checksum(ctx, r.URL.Query().Get("source"), r.URL.Query().Get("partial") == "true")
 	if err != nil {
-		writeContractError(w, http.StatusServiceUnavailable, "storage_unavailable", err.Error())
+		writeUpstreamError(w, err, "storage_unavailable")
 		return
 	}
 	writeJSON(w, http.StatusOK, checksum)
@@ -469,11 +479,11 @@ func (s *Server) handleAuditLocation(w http.ResponseWriter, r *http.Request) {
 		writeContractError(w, http.StatusServiceUnavailable, "storage_unavailable", "storage is not configured")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	location, err := s.store.Location(ctx, r.URL.Query().Get("hazard_id"))
 	if err != nil {
-		writeContractError(w, http.StatusServiceUnavailable, "storage_unavailable", err.Error())
+		writeUpstreamError(w, err, "storage_unavailable")
 		return
 	}
 	writeJSON(w, http.StatusOK, location)
@@ -485,12 +495,12 @@ func (s *Server) handleAuditUnprocessed(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	response, err := s.dlq.Unprocessed(ctx, r.URL.Query().Get("source"), r.URL.Query().Get("since"),
-		limit, r.URL.Query().Get("partial") == "true")
+		limit, r.URL.Query().Get("partial") == "true", r.URL.Query().Get("cursor"))
 	if err != nil {
-		writeContractError(w, http.StatusServiceUnavailable, "dlq_unavailable", err.Error())
+		writeUpstreamError(w, err, "dlq_unavailable")
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -502,6 +512,27 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 
 func writeContractError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": message}})
+}
+
+// writeUpstreamError preserves a 4xx contract error from storage or the DLQ
+// and degrades everything else to 503. Flattening 400s into 503 hides bad
+// parameters from the caller and makes the Audit API contract untestable.
+func writeUpstreamError(w http.ResponseWriter, err error, code string) {
+	var storageErr *storeclient.Error
+	if errors.As(err, &storageErr) && storageErr.Status >= 400 && storageErr.Status < 500 {
+		upstreamCode := storageErr.Code
+		if upstreamCode == "" {
+			upstreamCode = "invalid_request"
+		}
+		writeContractError(w, storageErr.Status, upstreamCode, storageErr.Message)
+		return
+	}
+	var dlqErr *dlqclient.StatusError
+	if errors.As(err, &dlqErr) && dlqErr.Status >= 400 && dlqErr.Status < 500 {
+		writeContractError(w, dlqErr.Status, "invalid_request", dlqErr.Message)
+		return
+	}
+	writeContractError(w, http.StatusServiceUnavailable, code, err.Error())
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

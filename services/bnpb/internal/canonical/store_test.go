@@ -182,9 +182,36 @@ func integration(t *testing.T) (*Store, Principal, Authority) {
 	}
 	return s, p, a
 }
+func TestAuthorityMatchesRequiresFreshRow(t *testing.T) {
+	s, p, a := integration(t)
+	ctx := context.Background()
+	// integration installed the row with exactly one hour left: no headroom.
+	if ok, err := s.AuthorityMatches(ctx, a.Partition, a.Epoch, p.Owner); err != nil || ok {
+		t.Fatalf("one-hour lease should not match: ok=%v err=%v", ok, err)
+	}
+	if err := s.InstallLease(ctx, Lease{a, p.Owner, time.Now().Add(24 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.AuthorityMatches(ctx, a.Partition, a.Epoch, p.Owner); err != nil || !ok {
+		t.Fatalf("fresh lease should match: ok=%v err=%v", ok, err)
+	}
+	if ok, err := s.AuthorityMatches(ctx, a.Partition, a.Epoch+1, p.Owner); err != nil || ok {
+		t.Fatalf("wrong epoch should not match: ok=%v err=%v", ok, err)
+	}
+	if ok, err := s.AuthorityMatches(ctx, a.Partition, a.Epoch, "someone-else"); err != nil || ok {
+		t.Fatalf("wrong owner should not match: ok=%v err=%v", ok, err)
+	}
+	if ok, err := s.AuthorityMatches(ctx, "missing-"+uuid.NewString(), a.Epoch, p.Owner); err != nil || ok {
+		t.Fatalf("missing partition should not match: ok=%v err=%v", ok, err)
+	}
+}
+
 func mutation(a Authority, version int64) Mutation {
 	lat, lon := -7.0, 110.0
-	return Mutation{version, "upsert", a, "test-correlation", &Input{"WILDFIRE", "AWAS", "same region", &lat, &lon, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), map[string]any{"detection_keys": []any{"verbatim|1.0000"}}}}
+	return Mutation{
+		Version: version, Operation: "upsert", Authority: a, CorrelationID: "test-correlation",
+		Event: &Input{"WILDFIRE", "AWAS", "same region", &lat, &lon, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), map[string]any{"detection_keys": []any{"verbatim|1.0000"}}},
+	}
 }
 func requireCode(t *testing.T, err error, code string) {
 	t.Helper()
@@ -225,7 +252,7 @@ func TestVersionsTombstonesAndAuthority(t *testing.T) {
 	m.Version = 1
 	_, err = s.Put(ctx, p, "SATELIT", ref, m)
 	requireCode(t, err, "stale_version")
-	m = Mutation{3, "retract", a, "retract", nil}
+	m = Mutation{Version: 3, Operation: "retract", Authority: a, CorrelationID: "retract"}
 	if _, err = s.Put(ctx, p, "SATELIT", ref, m); err != nil {
 		t.Fatal(err)
 	}

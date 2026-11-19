@@ -24,8 +24,11 @@ spec:
             - {name: DB_PATH, value: /app/data/bmkg.db}
             - name: BMKG_API_KEY
               valueFrom: {secretKeyRef: {name: bnpb-secrets, key: BMKG_API_KEY}}
-          readinessProbe: {tcpSocket: {port: 8081}, initialDelaySeconds: 3, periodSeconds: 5}
-          livenessProbe: {tcpSocket: {port: 8081}, initialDelaySeconds: 5, periodSeconds: 10}
+          # Seeding on a loaded node can take ~30s; liveness must not kill the
+          # process before it has listened once.
+          startupProbe: {tcpSocket: {port: 8081}, periodSeconds: 5, failureThreshold: 30, timeoutSeconds: 3}
+          readinessProbe: {tcpSocket: {port: 8081}, initialDelaySeconds: 3, periodSeconds: 5, timeoutSeconds: 3}
+          livenessProbe: {tcpSocket: {port: 8081}, initialDelaySeconds: 5, periodSeconds: 10, timeoutSeconds: 3}
           resources:
             requests: {memory: 64Mi}
             limits: {memory: 128Mi}

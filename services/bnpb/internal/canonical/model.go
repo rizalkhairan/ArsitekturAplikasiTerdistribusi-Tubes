@@ -43,6 +43,9 @@ type Authority struct {
 }
 type Mutation struct {
 	Version       int64     `json:"version"`
+	// AutoVersion makes replay choose the next version under the row lock, so
+	// several parked messages for one identity can all be recovered.
+	AutoVersion   bool      `json:"-"`
 	Operation     string    `json:"operation"`
 	Authority     Authority `json:"authority"`
 	CorrelationID string    `json:"correlation_id"`

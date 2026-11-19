@@ -91,7 +91,16 @@ func (c *Client) ParkRaw(ctx context.Context, source, sourceRef string, raw []by
 
 func (c *Client) SetAuditToken(token string) { c.auditToken = token }
 
-func (c *Client) Unprocessed(ctx context.Context, source, since string, limit int, partial bool) (map[string]any, error) {
+// StatusError preserves the upstream HTTP status so the Aggregator can return
+// the same code instead of turning every 4xx into a 503.
+type StatusError struct {
+	Status  int
+	Message string
+}
+
+func (e *StatusError) Error() string { return fmt.Sprintf("dlq HTTP %d: %s", e.Status, e.Message) }
+
+func (c *Client) Unprocessed(ctx context.Context, source, since string, limit int, partial bool, cursor string) (map[string]any, error) {
 	token := c.auditToken
 	if token == "" {
 		token = c.token
@@ -99,6 +108,12 @@ func (c *Client) Unprocessed(ctx context.Context, source, since string, limit in
 	query := url.Values{}
 	if source != "" {
 		query.Set("source", source)
+	}
+	if since != "" {
+		query.Set("since", since)
+	}
+	if cursor != "" {
+		query.Set("cursor", cursor)
 	}
 	if limit > 0 {
 		query.Set("limit", fmt.Sprint(limit))
@@ -122,7 +137,16 @@ func (c *Client) Unprocessed(ctx context.Context, source, since string, limit in
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("dlq returned HTTP %d: %s", resp.StatusCode, string(raw))
+		message := strings.TrimSpace(string(raw))
+		var apiErr struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(raw, &apiErr) == nil && apiErr.Error.Message != "" {
+			message = apiErr.Error.Message
+		}
+		return nil, &StatusError{Status: resp.StatusCode, Message: message}
 	}
 	if err := json.Unmarshal(raw, &response); err != nil {
 		return nil, err

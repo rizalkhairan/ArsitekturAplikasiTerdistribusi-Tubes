@@ -72,6 +72,7 @@ func main() {
 	if m2 {
 		coord = coordclient.New(cfg.CoordinatorURL, cfg.CoordinatorToken, cfg.UpstreamTimeout)
 		store = storeclient.New(cfg.StorageURL, cfg.StorageToken, cfg.InstanceID, cfg.UpstreamTimeout)
+		store.SetAuditTimeout(cfg.AuditTimeout)
 		if cfg.DLQURL != "" {
 			dlq = dlqclient.New(cfg.DLQURL, cfg.DLQToken, cfg.UpstreamTimeout)
 			dlq.SetAuditToken(cfg.AuditToken)
@@ -131,6 +132,7 @@ func main() {
 		readAPI.ConfigureM2(store, dlq, cfg.AuditToken, freshnessFunc(ctx, coord, store, cfg), func(ctx context.Context) any {
 			return sensorStatus(ctx, store, sensorBreaker, sensorCache, sensorProgress, cfg)
 		})
+		readAPI.WarmReadCache()
 	}
 	if sensorCache != nil {
 		severityCfg := sensor.SeverityConfig{
@@ -179,7 +181,9 @@ func main() {
 	if m2 {
 		leaderMetrics := leader.NewMetrics(registryMetrics)
 		pollers := leaderpoll.New(leaderpoll.Config{
-			PollInterval: cfg.PollInterval, MirrorLocal: cfg.MirrorLocal, KafkaTopic: cfg.KafkaTopic,
+			PollInterval: cfg.PollInterval, PVMBGBatchLimit: cfg.PVMBGBatchLimit,
+			BMKGBatchLimit: cfg.BMKGBatchLimit,
+			MirrorLocal: cfg.MirrorLocal, KafkaTopic: cfg.KafkaTopic,
 			Holder: cfg.InstanceID,
 		}, sources, coord, store, dlq, pools, registry, logger)
 
