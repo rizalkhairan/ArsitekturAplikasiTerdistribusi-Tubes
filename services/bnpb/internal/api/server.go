@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rizalkhairan/distributed-system/bnpb/internal/canonical"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/database"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/dlqclient"
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/health"
@@ -26,6 +28,12 @@ type listCacheEntry struct {
 	expires time.Time
 }
 
+type listFill struct {
+	done   chan struct{}
+	events []database.HazardEvent
+	err    error
+}
+
 type FreshnessFunc func(ctx context.Context, source string) (lastSuccess time.Time, stale bool, message string)
 
 type Server struct {
@@ -38,6 +46,7 @@ type Server struct {
 	stalenessThreshold time.Duration
 
 	store          *storeclient.Client
+	canonical      *canonical.Store
 	dlq            *dlqclient.Client
 	auditToken     string
 	freshness      FreshnessFunc
@@ -47,14 +56,17 @@ type Server struct {
 	outer          func(http.Handler) http.Handler
 	ready          func() bool
 	cacheMu        sync.Mutex
-	refreshMu      sync.Mutex
 	listCache      map[string]listCacheEntry
+	fills          map[string]*listFill
+	refreshing     map[string]bool
+	storeSlots     chan struct{}
 	cacheTTL       time.Duration
 }
 
 func NewServer(addr string, db, writeDB *sql.DB, topic, internalKey string, registry *health.Registry, stalenessThreshold time.Duration) *Server {
 	s := &Server{db: db, writeDB: writeDB, topic: topic, internalKey: internalKey, health: registry, stalenessThreshold: stalenessThreshold,
-		listCache: map[string]listCacheEntry{}, cacheTTL: 500 * time.Millisecond}
+		listCache: map[string]listCacheEntry{}, fills: map[string]*listFill{}, refreshing: map[string]bool{},
+		storeSlots: make(chan struct{}, 8), cacheTTL: 5 * time.Second}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /readyz", s.handleReady)
@@ -78,7 +90,7 @@ func NewServer(addr string, db, writeDB *sql.DB, topic, internalKey string, regi
 		Addr:         addr,
 		Handler:      handler,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: 120 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 	return s
@@ -165,72 +177,139 @@ func (s *Server) SetReadCacheTTL(ttl time.Duration) {
 	}
 }
 
+// WarmReadCache fills the common list keys after startup. The store remains
+// authoritative, but a newly started Aggregator no longer turns its first
+// callers into the slow Citus query.
+func (s *Server) WarmReadCache() {
+	if s.store == nil || s.cacheTTL <= 0 {
+		return
+	}
+	go func() {
+		for _, limit := range []int{20, 50, 100} {
+			_, _ = s.listEvents(context.Background(), "", "", "", limit)
+		}
+	}()
+}
+
 // SetSensorFallback installs the last-known-good snapshot for storage outages.
 func (s *Server) SetSensorFallback(fn func() ([]database.HazardEvent, time.Time, bool)) {
 	s.sensorFallback = fn
 }
 
 // listEvents caches canonical reads briefly to avoid a shared-store bottleneck.
+// Expired entries are served stale while one background refresh runs. Blocking
+// every request on a slow store read turns a cache expiry into a latency cliff;
+// stale-while-revalidate keeps reads responsive while freshness is still bounded
+// by READ_CACHE_TTL and the freshness headers.
 func (s *Server) listEvents(ctx context.Context, source, severity, since string, limit int) ([]database.HazardEvent, error) {
 	key := source + "\x00" + severity + "\x00" + since + "\x00" + strconv.Itoa(limit)
 	now := time.Now()
 	s.cacheMu.Lock()
-	if entry, ok := s.listCache[key]; ok && now.Before(entry.expires) {
-		events := entry.events
+	if entry, ok := s.listCache[key]; ok {
+		if now.Before(entry.expires) {
+			events := entry.events
+			s.cacheMu.Unlock()
+			return events, nil
+		}
+		// Stale-while-revalidate: never hold a request on a global refresh lock.
+		if !s.refreshing[key] {
+			s.refreshing[key] = true
+			s.cacheMu.Unlock()
+			go s.refreshList(key, source, severity, since, limit)
+			return entry.events, nil
+		}
 		s.cacheMu.Unlock()
-		return events, nil
+		return entry.events, nil
 	}
+
+	// Cold cache: coalesce all callers for this key onto one fill. The fill uses
+	// a background context so a client disconnect cannot poison the cache.
+	if fill, ok := s.fills[key]; ok {
+		s.cacheMu.Unlock()
+		select {
+		case <-fill.done:
+			return fill.events, fill.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	fill := &listFill{done: make(chan struct{})}
+	s.fills[key] = fill
 	s.cacheMu.Unlock()
 
-	// Serialize cache refreshes. Without this, every request that arrives just
-	// after expiry calls the shared store at once, which can exhaust its read
-	// path and turn a cache miss into a 503. Waiters re-check the cache after
-	// the first refresh completes.
-	s.refreshMu.Lock()
-	defer s.refreshMu.Unlock()
-
-	now = time.Now()
+	fill.events, fill.err = s.fetchList(context.Background(), source, since, limit)
 	s.cacheMu.Lock()
-	if entry, ok := s.listCache[key]; ok && now.Before(entry.expires) {
-		events := entry.events
+	delete(s.fills, key)
+	close(fill.done)
+	s.cacheMu.Unlock()
+	if fill.err != nil {
+		return nil, fill.err
+	}
+	s.storeList(key, source, severity, fill.events)
+	return filterSeverity(fill.events, severity), nil
+}
+
+func (s *Server) refreshList(key, source, severity, since string, limit int) {
+	defer func() {
+		s.cacheMu.Lock()
+		delete(s.refreshing, key)
 		s.cacheMu.Unlock()
-		return events, nil
+	}()
+	events, err := s.fetchList(context.Background(), source, since, limit)
+	if err != nil {
+		// Keep the last-known-good entry; the next request retries the refresh.
+		return
+	}
+	s.storeList(key, source, severity, events)
+}
+
+func (s *Server) fetchList(ctx context.Context, source, since string, limit int) ([]database.HazardEvent, error) {
+	if s.store == nil {
+		return nil, errors.New("canonical store is not configured")
+	}
+	select {
+	case s.storeSlots <- struct{}{}:
+		defer func() { <-s.storeSlots }()
+	case <-time.After(100 * time.Millisecond):
+		return nil, errors.New("canonical read bulkhead is full")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return s.store.List(ctx, source, since, limit)
+}
+
+func (s *Server) storeList(key, source, severity string, events []database.HazardEvent) {
+	if s.cacheTTL <= 0 {
+		return
+	}
+	// Keep the unfiltered list in the cache so a severity-filtered key does not
+	// trigger a second store read for the same source/window.
+	baseKey := source + "\x00\x00" + strings.Split(key, "\x00")[2] + "\x00" + strings.Split(key, "\x00")[3]
+	filtered := filterSeverity(events, severity)
+	now := time.Now()
+	s.cacheMu.Lock()
+	s.listCache[key] = listCacheEntry{events: filtered, expires: now.Add(s.cacheTTL)}
+	s.listCache[baseKey] = listCacheEntry{events: events, expires: now.Add(s.cacheTTL)}
+	if len(s.listCache) > 512 {
+		s.listCache = map[string]listCacheEntry{
+			key:     {events: filtered, expires: now.Add(s.cacheTTL)},
+			baseKey: {events: events, expires: now.Add(s.cacheTTL)},
+		}
 	}
 	s.cacheMu.Unlock()
+}
 
-	events, err := s.store.List(ctx, source, since, limit)
-	if err != nil {
-		// During a store or endpoint transition, serving the last-known-good
-		// response is better than turning a short read outage into a 5xx.
-		// The freshness headers still expose the source status.
-		s.cacheMu.Lock()
-		if entry, ok := s.listCache[key]; ok {
-			events = entry.events
-			err = nil
+func filterSeverity(events []database.HazardEvent, severity string) []database.HazardEvent {
+	if severity == "" {
+		return events
+	}
+	filtered := make([]database.HazardEvent, 0, len(events))
+	for _, event := range events {
+		if event.Severity == severity {
+			filtered = append(filtered, event)
 		}
-		s.cacheMu.Unlock()
 	}
-	if err != nil {
-		return nil, err
-	}
-	if severity != "" {
-		filtered := events[:0]
-		for _, event := range events {
-			if event.Severity == severity {
-				filtered = append(filtered, event)
-			}
-		}
-		events = filtered
-	}
-	if s.cacheTTL > 0 {
-		s.cacheMu.Lock()
-		s.listCache[key] = listCacheEntry{events: events, expires: now.Add(s.cacheTTL)}
-		if len(s.listCache) > 512 {
-			s.listCache = map[string]listCacheEntry{key: {events: events, expires: now.Add(s.cacheTTL)}}
-		}
-		s.cacheMu.Unlock()
-	}
-	return events, nil
+	return filtered
 }
 
 // internalAuth checks the shared secret for internal service-to-service calls.
@@ -292,14 +371,10 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		writeContractError(w, http.StatusServiceUnavailable, "draining", "instance is draining")
 		return
 	}
-	if s.store != nil {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-		if err := s.store.Ready(ctx); err != nil {
-			writeContractError(w, http.StatusServiceUnavailable, "storage_unavailable", err.Error())
-			return
-		}
-	}
+	// Storage is deliberately not part of readiness: a slow or unreachable
+	// store must still receive requests so the handler can answer with a
+	// partial page or an explicit availability marker. Taking every replica
+	// out of the Service turns a storage outage into a total outage.
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
@@ -373,12 +448,12 @@ func (s *Server) handleAuditEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	response, err := s.store.AuditEvents(ctx, r.URL.Query().Get("source"), r.URL.Query().Get("since"),
 		limit, r.URL.Query().Get("cursor"))
 	if err != nil {
-		writeContractError(w, http.StatusServiceUnavailable, "storage_unavailable", err.Error())
+		writeUpstreamError(w, err, "storage_unavailable")
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -389,11 +464,11 @@ func (s *Server) handleAuditChecksum(w http.ResponseWriter, r *http.Request) {
 		writeContractError(w, http.StatusServiceUnavailable, "storage_unavailable", "storage is not configured")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	checksum, err := s.store.Checksum(ctx, r.URL.Query().Get("source"), r.URL.Query().Get("partial") == "true")
 	if err != nil {
-		writeContractError(w, http.StatusServiceUnavailable, "storage_unavailable", err.Error())
+		writeUpstreamError(w, err, "storage_unavailable")
 		return
 	}
 	writeJSON(w, http.StatusOK, checksum)
@@ -404,11 +479,11 @@ func (s *Server) handleAuditLocation(w http.ResponseWriter, r *http.Request) {
 		writeContractError(w, http.StatusServiceUnavailable, "storage_unavailable", "storage is not configured")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	location, err := s.store.Location(ctx, r.URL.Query().Get("hazard_id"))
 	if err != nil {
-		writeContractError(w, http.StatusServiceUnavailable, "storage_unavailable", err.Error())
+		writeUpstreamError(w, err, "storage_unavailable")
 		return
 	}
 	writeJSON(w, http.StatusOK, location)
@@ -420,12 +495,12 @@ func (s *Server) handleAuditUnprocessed(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	response, err := s.dlq.Unprocessed(ctx, r.URL.Query().Get("source"), r.URL.Query().Get("since"),
-		limit, r.URL.Query().Get("partial") == "true")
+		limit, r.URL.Query().Get("partial") == "true", r.URL.Query().Get("cursor"))
 	if err != nil {
-		writeContractError(w, http.StatusServiceUnavailable, "dlq_unavailable", err.Error())
+		writeUpstreamError(w, err, "dlq_unavailable")
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -437,6 +512,27 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 
 func writeContractError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": message}})
+}
+
+// writeUpstreamError preserves a 4xx contract error from storage or the DLQ
+// and degrades everything else to 503. Flattening 400s into 503 hides bad
+// parameters from the caller and makes the Audit API contract untestable.
+func writeUpstreamError(w http.ResponseWriter, err error, code string) {
+	var storageErr *storeclient.Error
+	if errors.As(err, &storageErr) && storageErr.Status >= 400 && storageErr.Status < 500 {
+		upstreamCode := storageErr.Code
+		if upstreamCode == "" {
+			upstreamCode = "invalid_request"
+		}
+		writeContractError(w, storageErr.Status, upstreamCode, storageErr.Message)
+		return
+	}
+	var dlqErr *dlqclient.StatusError
+	if errors.As(err, &dlqErr) && dlqErr.Status >= 400 && dlqErr.Status < 500 {
+		writeContractError(w, dlqErr.Status, "invalid_request", dlqErr.Message)
+		return
+	}
+	writeContractError(w, http.StatusServiceUnavailable, code, err.Error())
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

@@ -23,13 +23,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-kubectl -n "$NS" port-forward svc/canonical-store 18095:8080 >/dev/null 2>&1 &
-STORAGE_PF=$!
-kubectl -n "$NS" port-forward svc/bmkg 18083:8083 >/dev/null 2>&1 &
-BMKG_PF=$!
-kubectl -n "$NS" port-forward svc/pvmbg 18082:8082 >/dev/null 2>&1 &
-PVMBG_PF=$!
-sleep 5
+if [[ "${SKIP_PF:-0}" != "1" ]]; then
+  kubectl -n "$NS" port-forward svc/canonical-store 18095:8080 >/dev/null 2>&1 &
+  STORAGE_PF=$!
+  kubectl -n "$NS" port-forward svc/bmkg 18083:8083 >/dev/null 2>&1 &
+  BMKG_PF=$!
+  kubectl -n "$NS" port-forward svc/pvmbg 18082:8082 >/dev/null 2>&1 &
+  PVMBG_PF=$!
+  sleep 10
+fi
 
 curl -fsS http://127.0.0.1:18095/events > "$OUT/detector-events.json"
 curl -fsS http://127.0.0.1:18083/admin/requests > "$OUT/detector-bmkg.json"

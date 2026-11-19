@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: sistem-informasi-kebencanaan-bnpb
+resources:
+  - platform.yaml
+  - storage.yaml
+  - config.yaml
+  - services.yaml
+  - workloads.yaml
+  - identities.yaml
+  - network-policies.yaml
+  - admission.yaml
+  - citus.yaml
+  - citus-init.yaml
+  - canonical-api.yaml

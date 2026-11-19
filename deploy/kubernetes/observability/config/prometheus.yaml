@@ -1,0 +1,57 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+- job_name: aggregator
+  metrics_path: /metrics
+  static_configs:
+  - targets: [aggregator:8085]
+    labels:
+      service: aggregator
+
+- job_name: client-api
+  metrics_path: /metrics
+  static_configs:
+  - targets: [client-api:8080]
+    labels:
+      service: client-api
+
+- job_name: canonical-store
+  metrics_path: /metrics
+  static_configs:
+  - targets: [canonical-store:8080]
+    labels:
+      service: canonical-store
+
+- job_name: coordinator
+  metrics_path: /metrics
+  static_configs:
+  - targets: [coordinator:8080]
+    labels:
+      service: coordinator
+
+- job_name: auth
+  metrics_path: /metrics
+  static_configs:
+  - targets: [auth:9090]
+    labels:
+      service: auth
+
+- job_name: field-notifier
+  metrics_path: /metrics
+  static_configs:
+  - targets: [field-notifier:8080]
+    labels:
+      service: field-notifier
+
+- job_name: satellite-processor
+  metrics_path: /metrics
+  static_configs:
+  - targets: [satellite-processor:9090]
+    labels:
+      service: satellite-processor
+
+- job_name: prometheus
+  static_configs:
+  - targets: [localhost:9090]

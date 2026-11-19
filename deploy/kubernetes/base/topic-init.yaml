@@ -1,0 +1,52 @@
+# Kubernetes baseline for the current M1 application; see deploy/README.md.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: topic-init
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  backoffLimit: 4
+  activeDeadlineSeconds: 240
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: topic-init
+        app.kubernetes.io/part-of: bnpb
+        app.kubernetes.io/component: other
+        role: other
+    spec:
+      restartPolicy: Never
+      serviceAccountName: topic-init
+      automountServiceAccountToken: false
+      nodeSelector:
+        app-eligible: 'true'
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+      containers:
+      - name: topic-init
+        image: docker.io/apache/kafka:3.9.0
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/bash
+        - -ec
+        args:
+        - "for topic in hazard-events hazard-events-dlq; do\n  /opt/kafka/bin/kafka-topics.sh\
+          \ --bootstrap-server kafka:9092 --create --if-not-exists --topic \"$topic\"\
+          \ --partitions 3 --replication-factor 1 --config retention.ms=604800000\n\
+          done\n"
+        env:
+        - name: KAFKA_HEAP_OPTS
+          value: -Xms32m -Xmx96m
+        resources:
+          requests:
+            memory: 128Mi
+          limits:
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL

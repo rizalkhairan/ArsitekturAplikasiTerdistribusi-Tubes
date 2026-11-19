@@ -28,8 +28,11 @@ spec:
               valueFrom: {secretKeyRef: {name: bnpb-secrets, key: PVMBG_ADMIN_USERNAME}}
             - name: ADMIN_PASSWORD
               valueFrom: {secretKeyRef: {name: bnpb-secrets, key: PVMBG_ADMIN_PASSWORD}}
-          readinessProbe: {httpGet: {path: /health, port: 8082}, initialDelaySeconds: 3, periodSeconds: 5}
-          livenessProbe: {httpGet: {path: /health, port: 8082}, initialDelaySeconds: 5, periodSeconds: 10}
+          # Seeding on a loaded node can take ~30s; liveness must not kill the
+          # process before it has listened once.
+          startupProbe: {httpGet: {path: /health, port: 8082}, periodSeconds: 5, failureThreshold: 30, timeoutSeconds: 3}
+          readinessProbe: {httpGet: {path: /health, port: 8082}, initialDelaySeconds: 3, periodSeconds: 5, timeoutSeconds: 3}
+          livenessProbe: {httpGet: {path: /health, port: 8082}, initialDelaySeconds: 5, periodSeconds: 10, timeoutSeconds: 3}
           resources:
             requests: {memory: 64Mi}
             limits: {memory: 128Mi}

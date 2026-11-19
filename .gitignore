@@ -32,3 +32,11 @@ services/canonical-store/data/
 loadtest/results/*
 !loadtest/results/README.md
 deploy/secrets.yaml
+
+# Temporary image-import and debug artifacts
+bnpb-images*.tar
+agg*.tar
+importer-*.yaml
+small-test.txt
+copy-*.bat
+*.exe

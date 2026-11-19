@@ -2,10 +2,12 @@ FROM golang:1.26-alpine AS builder
 
 WORKDIR /src/services/client-api
 COPY libs/observability/go.mod /src/libs/observability/
+COPY services/shared/go.mod services/shared/go.sum /src/services/shared/
 COPY services/client-api/go.mod services/client-api/go.sum ./
 RUN go mod download
 
 COPY libs/observability /src/libs/observability
+COPY services/shared /src/services/shared
 COPY services/client-api/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/client-api .
 

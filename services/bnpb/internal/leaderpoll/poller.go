@@ -19,10 +19,12 @@ import (
 )
 
 type Config struct {
-	PollInterval time.Duration
-	MirrorLocal  bool
-	KafkaTopic   string
-	Holder       string
+	PollInterval    time.Duration
+	PVMBGBatchLimit int
+	BMKGBatchLimit  int
+	MirrorLocal     bool
+	KafkaTopic      string
+	Holder          string
 }
 
 type Poller struct {
@@ -97,6 +99,13 @@ func (p *Poller) pollBMKG(ctx context.Context, lease coordclient.Lease, state *b
 	if err != nil {
 		return err
 	}
+	// Same bounded-prefix rule as PVMBG: the source returns everything since the
+	// cursor ordered by occurred_at, and a single transient failure would replay
+	// an unbounded batch. Warnings stay whole: they are rare, and slicing them
+	// independently could separate a warning from its event.
+	if limit := p.cfg.BMKGBatchLimit; limit > 0 && len(events) > limit {
+		events = events[:limit]
+	}
 	lookup := func(ctx context.Context, source, refID string) (database.HazardEvent, error) {
 		event, err := p.store.Get(ctx, refID)
 		if errors.Is(err, storeclient.ErrNotFound) {
@@ -165,6 +174,15 @@ func (p *Poller) pollPVMBG(ctx context.Context, lease coordclient.Lease, state *
 	if err != nil {
 		return err
 	}
+	// The source returns the whole backlog since the cursor, ordered by
+	// reported_at. Persisting all of it in one pass means a single transient
+	// write failure replays every already-stored report on the next tick; once
+	// the backlog takes longer to replay than the gap between failures, the
+	// checkpoint can never advance. Commit a bounded prefix per poll instead,
+	// so every tick that stores anything also moves the cursor forward.
+	if limit := p.cfg.PVMBGBatchLimit; limit > 0 && len(reports) > limit {
+		reports = reports[:limit]
+	}
 	batch, err := processing.AggregatePVMBG(ctx, p.pools.Read, reports, cursors)
 	if err != nil {
 		return err
@@ -197,7 +215,7 @@ func (p *Poller) persist(ctx context.Context, lease coordclient.Lease, hazards [
 		return err
 	}
 	for _, hazard := range hazards {
-		if _, _, err := p.store.Upsert(ctx, hazard, version, lease.Epoch, scope); err != nil {
+		if _, _, err := p.store.UpsertAuto(ctx, hazard, version, lease.Epoch, scope); err != nil {
 			if errors.Is(err, storeclient.ErrFenced) {
 				return err
 			}

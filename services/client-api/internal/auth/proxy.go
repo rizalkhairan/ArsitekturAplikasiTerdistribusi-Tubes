@@ -2,8 +2,10 @@ package auth
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/rizalkhairan/distributed-system/shared/telemetry"
 	"io"
 	"net/http"
 	"time"
@@ -16,22 +18,31 @@ type AuthProxy struct {
 }
 
 // NewAuthProxy creates a new auth proxy.
-func NewAuthProxy(authURL string) *AuthProxy {
-	return &AuthProxy{
+func NewAuthProxy(authURL string, runtimes ...*telemetry.Runtime) *AuthProxy {
+	proxy := &AuthProxy{
 		authURL: authURL,
 		http:    &http.Client{Timeout: 10 * time.Second},
 	}
+	if len(runtimes) > 0 && runtimes[0] != nil {
+		proxy.http.Transport = runtimes[0].Transport(nil)
+	}
+	return proxy
 }
 
 // Login forwards username/password to the auth service.
 func (p *AuthProxy) Login(correlationID, username, password string) (map[string]any, error) {
+	return p.LoginContext(telemetry.WithCorrelation(context.Background(), correlationID), username, password)
+}
+
+func (p *AuthProxy) LoginContext(ctx context.Context, username, password string) (map[string]any, error) {
+	correlationID := telemetry.CorrelationID(ctx)
 	payload := map[string]string{
 		"username": username,
 		"password": password,
 	}
 	body, _ := json.Marshal(payload)
 
-	req, err := http.NewRequest(http.MethodPost, p.authURL+"/auth/login", bytes.NewBuffer(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.authURL+"/auth/login", bytes.NewBuffer(body))
 	if err != nil {
 		return nil, fmt.Errorf("auth login: %w", err)
 	}
@@ -59,12 +70,17 @@ func (p *AuthProxy) Login(correlationID, username, password string) (map[string]
 
 // Refresh forwards the refresh token to the auth service.
 func (p *AuthProxy) Refresh(correlationID, refreshToken string) (map[string]any, error) {
+	return p.RefreshContext(telemetry.WithCorrelation(context.Background(), correlationID), refreshToken)
+}
+
+func (p *AuthProxy) RefreshContext(ctx context.Context, refreshToken string) (map[string]any, error) {
+	correlationID := telemetry.CorrelationID(ctx)
 	payload := map[string]string{
 		"refresh_token": refreshToken,
 	}
 	body, _ := json.Marshal(payload)
 
-	req, err := http.NewRequest(http.MethodPost, p.authURL+"/auth/refresh", bytes.NewBuffer(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.authURL+"/auth/refresh", bytes.NewBuffer(body))
 	if err != nil {
 		return nil, fmt.Errorf("auth refresh: %w", err)
 	}

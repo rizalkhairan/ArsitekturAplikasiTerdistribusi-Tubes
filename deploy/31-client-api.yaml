@@ -24,7 +24,8 @@ spec:
             - configMapRef: {name: bnpb-config}
           env:
             - {name: PORT, value: "8080"}
-            - {name: UPSTREAM_TIMEOUT, value: 2s}
+            - {name: UPSTREAM_TIMEOUT, value: 4s}
+            - {name: UPSTREAM_RETRIES, value: "1"}
             - name: JWT_SECRET
               valueFrom: {secretKeyRef: {name: bnpb-secrets, key: JWT_SECRET}}
             - name: BNPB_INTERNAL_KEY
@@ -48,9 +49,10 @@ kind: Service
 metadata:
   name: client-api
 spec:
+  type: NodePort
   selector: {app: client-api}
   ports:
-    - {name: http, port: 8080, targetPort: 8080}
+    - {name: http, port: 8080, targetPort: 8080, nodePort: 30081}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

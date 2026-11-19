@@ -1,0 +1,1057 @@
+# Kubernetes baseline for the current M1 application; see deploy/README.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bnpb
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bnpb
+      app.kubernetes.io/part-of: bnpb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bnpb
+        app.kubernetes.io/part-of: bnpb
+        app.kubernetes.io/component: aggregator
+        role: aggregator
+    spec:
+      serviceAccountName: bnpb
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: bnpb
+        image: bnpb.local/bnpb:dev
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: metrics
+          containerPort: 9090
+        - name: http
+          containerPort: 8085
+        - name: health
+          containerPort: 8080
+        resources:
+          requests:
+            memory: 256Mi
+          limits:
+            memory: 512Mi
+        envFrom:
+        - configMapRef:
+            name: bnpb-config
+        env:
+        - name: METRICS_ADDR
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: METRICS_ADDR
+        - name: BNPB_TRACE_SAMPLE_RATIO
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: BNPB_TRACE_SAMPLE_RATIO
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_EXPORTER_OTLP_PROTOCOL
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_EXPORTER_OTLP_ENDPOINT
+        - name: OTEL_TRACES_EXPORTER
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_TRACES_EXPORTER
+        - name: DEPLOYMENT_ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: DEPLOYMENT_ENVIRONMENT
+        - name: OTEL_SERVICE_NAME
+          value: bnpb
+        - name: TZ
+          value: UTC
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: BMKG_GRPC_ADDR
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-platform
+              key: BMKG_GRPC_ADDR
+        - name: PVMBG_BASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-platform
+              key: PVMBG_BASE_URL
+        - name: KAFKA_BROKERS
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-platform
+              key: KAFKA_BROKERS
+        - name: BMKG_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: bnpb-bmkg-auth
+              key: api-key
+        - name: PVMBG_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: bnpb-pvmbg-auth
+              key: token
+        - name: INTERNAL_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: bnpb-m1-internal-auth
+              key: key
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        startupProbe:
+          httpGet: &id001
+            path: /health
+            port: health
+          periodSeconds: 5
+          failureThreshold: 36
+          timeoutSeconds: 3
+        readinessProbe:
+          httpGet: *id001
+          periodSeconds: 5
+          failureThreshold: 3
+          timeoutSeconds: 3
+        livenessProbe:
+          httpGet: *id001
+          periodSeconds: 10
+          failureThreshold: 6
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: data
+          mountPath: /app/data
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: data
+        persistentVolumeClaim:
+          claimName: bnpb-m1-data
+      nodeSelector:
+        aggregator-eligible: 'true'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: auth
+      app.kubernetes.io/part-of: bnpb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: auth
+        app.kubernetes.io/part-of: bnpb
+        app.kubernetes.io/component: api
+        role: api
+    spec:
+      serviceAccountName: auth
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: auth
+        image: bnpb.local/auth:dev
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: metrics
+          containerPort: 9090
+        - name: http
+          containerPort: 8000
+        resources:
+          requests:
+            memory: 128Mi
+          limits:
+            memory: 256Mi
+        envFrom:
+        - configMapRef:
+            name: auth-config
+        env:
+        - name: METRICS_ADDR
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: METRICS_ADDR
+        - name: BNPB_TRACE_SAMPLE_RATIO
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: BNPB_TRACE_SAMPLE_RATIO
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_EXPORTER_OTLP_PROTOCOL
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_EXPORTER_OTLP_ENDPOINT
+        - name: OTEL_TRACES_EXPORTER
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_TRACES_EXPORTER
+        - name: DEPLOYMENT_ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: DEPLOYMENT_ENVIRONMENT
+        - name: OTEL_SERVICE_NAME
+          value: auth
+        - name: TZ
+          value: UTC
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: bnpb-jwt-auth
+              key: signing-key
+        - name: MEDIA_USER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: bnpb-user-auth
+              key: media-password
+        - name: FIELD_USER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: bnpb-user-auth
+              key: field-password
+        - name: INTERNAL_USER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: bnpb-user-auth
+              key: internal-password
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        startupProbe:
+          httpGet: &id001
+            path: /health
+            port: http
+          periodSeconds: 5
+          failureThreshold: 36
+          timeoutSeconds: 3
+        readinessProbe:
+          httpGet: *id001
+          periodSeconds: 5
+          failureThreshold: 3
+          timeoutSeconds: 3
+        livenessProbe:
+          httpGet: *id001
+          periodSeconds: 10
+          failureThreshold: 6
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: data
+          mountPath: /app/data
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: data
+        persistentVolumeClaim:
+          claimName: auth-data
+      nodeSelector:
+        app-eligible: 'true'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: client-api
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: client-api
+      app.kubernetes.io/part-of: bnpb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: client-api
+        app.kubernetes.io/part-of: bnpb
+        app.kubernetes.io/component: api
+        role: api
+    spec:
+      serviceAccountName: client-api
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: client-api
+        image: bnpb.local/client-api:dev
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: metrics
+          containerPort: 9090
+        - name: http
+          containerPort: 8080
+        resources:
+          requests:
+            memory: 128Mi
+          limits:
+            memory: 256Mi
+        envFrom:
+        - configMapRef:
+            name: client-api-config
+        env:
+        - name: METRICS_ADDR
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: METRICS_ADDR
+        - name: BNPB_TRACE_SAMPLE_RATIO
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: BNPB_TRACE_SAMPLE_RATIO
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_EXPORTER_OTLP_PROTOCOL
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_EXPORTER_OTLP_ENDPOINT
+        - name: OTEL_TRACES_EXPORTER
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: OTEL_TRACES_EXPORTER
+        - name: DEPLOYMENT_ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-telemetry
+              key: DEPLOYMENT_ENVIRONMENT
+        - name: OTEL_SERVICE_NAME
+          value: client-api
+        - name: TZ
+          value: UTC
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: BNPB_API_URL
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-platform
+              key: BNPB_API_URL
+        - name: AUTH_SERVICE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-platform
+              key: AUTH_SERVICE_URL
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: bnpb-jwt-auth
+              key: signing-key
+        - name: BNPB_INTERNAL_KEY
+          valueFrom:
+            secretKeyRef:
+              name: bnpb-m1-internal-auth
+              key: key
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        startupProbe:
+          httpGet: &id001
+            path: /health
+            port: http
+          periodSeconds: 5
+          failureThreshold: 36
+          timeoutSeconds: 3
+        readinessProbe:
+          httpGet: *id001
+          periodSeconds: 5
+          failureThreshold: 3
+          timeoutSeconds: 3
+        livenessProbe:
+          httpGet: *id001
+          periodSeconds: 10
+          failureThreshold: 6
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      nodeSelector:
+        app-eligible: 'true'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bmkg
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bmkg
+      app.kubernetes.io/part-of: bnpb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bmkg
+        app.kubernetes.io/part-of: bnpb
+        app.kubernetes.io/component: mock
+        role: mock
+    spec:
+      serviceAccountName: bmkg
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: bmkg
+        image: bnpb.local/bmkg:dev
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: grpc
+          containerPort: 8081
+        resources:
+          requests:
+            memory: 64Mi
+          limits:
+            memory: 128Mi
+        envFrom:
+        - configMapRef:
+            name: bmkg-config
+        env:
+        - name: OTEL_SERVICE_NAME
+          value: bmkg
+        - name: TZ
+          value: UTC
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: BMKG_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: bnpb-bmkg-auth
+              key: api-key
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        startupProbe:
+          tcpSocket: &id001
+            port: grpc
+          periodSeconds: 5
+          failureThreshold: 36
+          timeoutSeconds: 3
+        readinessProbe:
+          tcpSocket: *id001
+          periodSeconds: 5
+          failureThreshold: 3
+          timeoutSeconds: 3
+        livenessProbe:
+          tcpSocket: *id001
+          periodSeconds: 10
+          failureThreshold: 6
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: data
+          mountPath: /app/data
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: data
+        persistentVolumeClaim:
+          claimName: bmkg-data
+      nodeSelector:
+        app-eligible: 'true'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pvmbg
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pvmbg
+      app.kubernetes.io/part-of: bnpb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pvmbg
+        app.kubernetes.io/part-of: bnpb
+        app.kubernetes.io/component: mock
+        role: mock
+    spec:
+      serviceAccountName: pvmbg
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: pvmbg
+        image: bnpb.local/pvmbg:dev
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8082
+        resources:
+          requests:
+            memory: 64Mi
+          limits:
+            memory: 128Mi
+        envFrom:
+        - configMapRef:
+            name: pvmbg-config
+        env:
+        - name: OTEL_SERVICE_NAME
+          value: pvmbg
+        - name: TZ
+          value: UTC
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: PVMBG_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: bnpb-pvmbg-auth
+              key: token
+        - name: ADMIN_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: bnpb-pvmbg-admin
+              key: username
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: bnpb-pvmbg-admin
+              key: password
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        startupProbe:
+          httpGet: &id001
+            path: /health
+            port: http
+          periodSeconds: 5
+          failureThreshold: 36
+          timeoutSeconds: 3
+        readinessProbe:
+          httpGet: *id001
+          periodSeconds: 5
+          failureThreshold: 3
+          timeoutSeconds: 3
+        livenessProbe:
+          httpGet: *id001
+          periodSeconds: 10
+          failureThreshold: 6
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: data
+          mountPath: /app/data
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: data
+        persistentVolumeClaim:
+          claimName: pvmbg-data
+      nodeSelector:
+        store-eligible: 'true'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafka
+      app.kubernetes.io/part-of: bnpb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka
+        app.kubernetes.io/part-of: bnpb
+        app.kubernetes.io/component: broker
+        role: broker
+    spec:
+      serviceAccountName: kafka
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: kafka
+        image: docker.io/apache/kafka:3.9.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: broker
+          containerPort: 9092
+        resources:
+          requests:
+            memory: 512Mi
+          limits:
+            memory: 1Gi
+        envFrom:
+        - configMapRef:
+            name: kafka-config
+        env:
+        - name: OTEL_SERVICE_NAME
+          value: kafka
+        - name: TZ
+          value: UTC
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+        startupProbe:
+          tcpSocket: &id001
+            port: broker
+          periodSeconds: 5
+          failureThreshold: 36
+          timeoutSeconds: 3
+        readinessProbe:
+          tcpSocket: *id001
+          periodSeconds: 5
+          failureThreshold: 3
+          timeoutSeconds: 3
+        livenessProbe:
+          tcpSocket: *id001
+          periodSeconds: 10
+          failureThreshold: 6
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: data
+          mountPath: /var/lib/kafka/data
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: data
+        persistentVolumeClaim:
+          claimName: kafka-data
+      nodeSelector:
+        store-eligible: 'true'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-updater
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dashboard-updater
+      app.kubernetes.io/part-of: bnpb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dashboard-updater
+        app.kubernetes.io/part-of: bnpb
+        app.kubernetes.io/component: processor
+        role: consumer
+    spec:
+      serviceAccountName: dashboard-updater
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: dashboard-updater
+        image: bnpb.local/dashboard-updater:dev
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: health
+          containerPort: 8080
+        resources:
+          requests:
+            memory: 128Mi
+          limits:
+            memory: 256Mi
+        envFrom:
+        - configMapRef:
+            name: dashboard-updater-config
+        env:
+        - name: OTEL_SERVICE_NAME
+          value: dashboard-updater
+        - name: TZ
+          value: UTC
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: KAFKA_BROKERS
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-platform
+              key: KAFKA_BROKERS
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        startupProbe:
+          httpGet: &id001
+            path: /health
+            port: health
+          periodSeconds: 5
+          failureThreshold: 36
+          timeoutSeconds: 3
+        readinessProbe:
+          httpGet: *id001
+          periodSeconds: 5
+          failureThreshold: 3
+          timeoutSeconds: 3
+        livenessProbe:
+          httpGet: *id001
+          periodSeconds: 10
+          failureThreshold: 6
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      nodeSelector:
+        app-eligible: 'true'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notifier
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: notifier
+      app.kubernetes.io/part-of: bnpb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: notifier
+        app.kubernetes.io/part-of: bnpb
+        app.kubernetes.io/component: processor
+        role: consumer
+    spec:
+      serviceAccountName: notifier
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: notifier
+        image: bnpb.local/notifier:dev
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: health
+          containerPort: 8080
+        resources:
+          requests:
+            memory: 128Mi
+          limits:
+            memory: 256Mi
+        envFrom:
+        - configMapRef:
+            name: notifier-config
+        env:
+        - name: OTEL_SERVICE_NAME
+          value: notifier
+        - name: TZ
+          value: UTC
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: KAFKA_BROKERS
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-platform
+              key: KAFKA_BROKERS
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        startupProbe:
+          httpGet: &id001
+            path: /health
+            port: health
+          periodSeconds: 5
+          failureThreshold: 36
+          timeoutSeconds: 3
+        readinessProbe:
+          httpGet: *id001
+          periodSeconds: 5
+          failureThreshold: 3
+          timeoutSeconds: 3
+        livenessProbe:
+          httpGet: *id001
+          periodSeconds: 10
+          failureThreshold: 6
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      nodeSelector:
+        app-eligible: 'true'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-consumer
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: analytics-consumer
+      app.kubernetes.io/part-of: bnpb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: analytics-consumer
+        app.kubernetes.io/part-of: bnpb
+        app.kubernetes.io/component: processor
+        role: consumer
+    spec:
+      serviceAccountName: analytics-consumer
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: analytics-consumer
+        image: bnpb.local/analytics-consumer:dev
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: health
+          containerPort: 8080
+        resources:
+          requests:
+            memory: 128Mi
+          limits:
+            memory: 256Mi
+        envFrom:
+        - configMapRef:
+            name: analytics-consumer-config
+        env:
+        - name: OTEL_SERVICE_NAME
+          value: analytics-consumer
+        - name: TZ
+          value: UTC
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: KAFKA_BROKERS
+          valueFrom:
+            configMapKeyRef:
+              name: bnpb-platform
+              key: KAFKA_BROKERS
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        startupProbe:
+          httpGet: &id001
+            path: /health
+            port: health
+          periodSeconds: 5
+          failureThreshold: 36
+          timeoutSeconds: 3
+        readinessProbe:
+          httpGet: *id001
+          periodSeconds: 5
+          failureThreshold: 3
+          timeoutSeconds: 3
+        livenessProbe:
+          httpGet: *id001
+          periodSeconds: 10
+          failureThreshold: 6
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      nodeSelector:
+        app-eligible: 'true'

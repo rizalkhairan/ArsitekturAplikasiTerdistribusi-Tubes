@@ -6,7 +6,6 @@ resources:
   - 10-config.yaml
   - 11-secrets.dev.yaml
   - 20-coordinator.yaml
-  - 21-canonical-store.yaml
   - 22-ingest-pipeline.yaml
   - 23-field-notifier.yaml
   - 30-aggregator.yaml
@@ -17,7 +16,12 @@ resources:
   - 50-kafka.yaml
   - 52-event-consumers.yaml
   - 53-satellite.yaml
+  - 70-storage-isolation.yaml
   - sensor-pantai/base
+  - kubernetes/base/citus.yaml
+  - kubernetes/base/canonical-api.yaml
+  - kubernetes/base/citus-init.yaml
+  - kubernetes/observability
 labels:
   - pairs:
       app.kubernetes.io/part-of: bnpb-gateway

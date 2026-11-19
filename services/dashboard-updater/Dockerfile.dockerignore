@@ -1,0 +1,9 @@
+# Keep local credentials and runtime data out of image build contexts.
+.env*
+**/.env*
+data
+**/data
+*.db*
+**/*.db*
+.git
+**/.git

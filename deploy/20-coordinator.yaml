@@ -44,12 +44,14 @@ spec:
           env:
             - {name: ADDR, value: ":8080"}
             - {name: STATE_PATH, value: /data/coordinator.json}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              valueFrom: {configMapKeyRef: {name: bnpb-config, key: OTEL_EXPORTER_OTLP_ENDPOINT}}
             - name: COORDINATOR_TOKEN
               valueFrom: {secretKeyRef: {name: bnpb-secrets, key: COORDINATOR_TOKEN}}
           ports:
             - {containerPort: 8080, name: http}
-          readinessProbe: {httpGet: {path: /readyz, port: 8080}, initialDelaySeconds: 3, periodSeconds: 5}
-          livenessProbe: {httpGet: {path: /health, port: 8080}, initialDelaySeconds: 5, periodSeconds: 10}
+          readinessProbe: {httpGet: {path: /readyz, port: 8080}, initialDelaySeconds: 3, periodSeconds: 5, timeoutSeconds: 3, failureThreshold: 4}
+          livenessProbe: {httpGet: {path: /health, port: 8080}, initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 6}
           resources:
             requests: {memory: 512Mi}
             limits: {memory: 1Gi}

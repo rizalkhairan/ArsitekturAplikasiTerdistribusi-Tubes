@@ -1,0 +1,69 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bnpb
+  namespace: sistem-informasi-kebencanaan-bnpb
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: auth
+  namespace: sistem-informasi-kebencanaan-bnpb
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: client-api
+  namespace: sistem-informasi-kebencanaan-bnpb
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bmkg
+  namespace: sistem-informasi-kebencanaan-bnpb
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pvmbg
+  namespace: sistem-informasi-kebencanaan-bnpb
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kafka
+  namespace: sistem-informasi-kebencanaan-bnpb
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dashboard-updater
+  namespace: sistem-informasi-kebencanaan-bnpb
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: notifier
+  namespace: sistem-informasi-kebencanaan-bnpb
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: analytics-consumer
+  namespace: sistem-informasi-kebencanaan-bnpb
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: topic-init
+  namespace: sistem-informasi-kebencanaan-bnpb
+automountServiceAccountToken: false

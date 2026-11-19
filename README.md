@@ -5,13 +5,51 @@ BMKG dan PVMBG adalah mock service pasif; BNPB melakukan polling, memetakan data
 format kanonik `HazardEvent`, menyimpannya, dan mempublikasikannya ke message broker
 untuk dikonsumsi beberapa consumer independen.
 
-Cakupan: dua instansi sumber (BMKG, PVMBG), dua jenis bencana (seismik, vulkanik),
-BNPB sebagai node koordinasi.
+Cakupan M1: dua instansi sumber (BMKG, PVMBG), dua jenis bencana (seismik,
+vulkanik), BNPB sebagai node koordinasi. M2 menambahkan sumber **SATELIT**
+(hotspot WILDFIRE) dan **SENSOR_PANTAI** (COASTAL), serta penyimpanan Citus
+terdistribusi.
 
 Pengembangan M2 mengacu pada [arsitektur](services/ARCHITECTURE.md),
 [kontrak API kanonik](contracts/m2/README.md), serta
 [konvensi platform dan telemetri](contracts/m2/PLATFORM.md).
 [Helper Go bersama](services/shared/README.md) menyediakan contoh instrumentasi dua service.
+
+## 0. Deployment M2 (Kubernetes)
+
+Demo M2 berjalan di tiga node K3s dengan kernel terpisah. Docker Compose M1
+tetap tersedia untuk pengembangan lokal, tetapi bukan topologi demo.
+
+| Node | Jenis | Peran | vCPU | RAM |
+| --- | --- | --- | --- | --- |
+| `node-control` | VM VirtualBox | control plane + worker + Citus coordinator | 4 | 8 GiB |
+| `node-app` | VM VirtualBox | worker + Citus worker + aplikasi | 4 | 8 GiB |
+| `node-store` | VM VirtualBox | worker + Citus worker + observability | 4 | 8 GiB |
+
+Host fisik demo: mesin Windows dengan **8 vCPU** dan **32 GiB RAM**; node
+berjalan sebagai tiga VM VirtualBox dengan kernel Linux terpisah. Ganti nama
+node pada perintah di bawah sesuai `kubectl get nodes`.
+
+Setelah image di-import ke ketiga node (lihat bagian image), deployment utama
+adalah satu perintah:
+
+```bash
+bash scripts/deploy.sh <node-control> <node-app> <node-store>
+```
+
+Perintah tersebut memasang label peran, membuat Secret Citus, menerapkan
+`kubectl apply -k deploy`, dan menunggu `citus-init` serta rollout adapter.
+Tidak ada taint khusus pada control node agar Tester Agent dapat berjalan di
+setiap node. Pasang Tester Agent tanpa mengubah image:
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/susTuna/if4031-tester-agent/ebb55261711123a9a211739ffbf140a275caa6da/manifest.yaml
+kubectl -n tester-agent get daemonset,pods
+```
+
+Konfigurasi utama ada di `deploy/10-config.yaml` (ConfigMap `bnpb-config`) dan
+Secret `bnpb-secrets`/`bnpb-citus-*`. Variabel penting: `STORAGE_URL`,
+`COORDINATOR_URL`, `READ_CACHE_TTL`, `UPSTREAM_TIMEOUT`, `UPSTREAM_RETRIES`.
 
 ---
 
@@ -31,7 +69,7 @@ Pengembangan M2 mengacu pada [arsitektur](services/ARCHITECTURE.md),
                          │ BNPB Aggregator          │─gRPC──▶│ BMKG mock  :8081   │
                          │  read API  :8085         │        └────────────────────┘
                          │  health    :8086         │        ┌────────────────────┐
-                         │  Canonical Store (SQLite)│─REST──▶│ PVMBG mock :8082   │
+                         │  canonical-api → Citus   │─REST──▶│ PVMBG mock :8082   │
                          │  Outbox                  │        └────────────────────┘
                          └─────────────┬────────────┘
                                        │ publish HazardEvent
@@ -681,10 +719,321 @@ To inject poison Kafka records for the malformed-message demonstration, publish 
 
 ---
 
-## 10. Milestone 2 - Problem 2: Ketahanan Aggregator
+## 10. Milestone 2
+
+### Setup sebelum Problem 1
+
+**Prasyarat:** Docker pada mesin build, `kubectl` + Kustomize, `k6`, `jq`,
+`curl`, `python3`, dan tiga VM k3s. Semua perintah dijalankan dari root
+repository. Untuk P3/P4 lokal, cukup Docker Compose.
+
+```bash
+export KUBECONFIG=/path/ke/kubeconfig-cluster-demo
+kubectl get nodes                 # ketiga node harus Ready
+```
+
+Build semua image, lalu impor ke setiap node k3s:
+
+```bash
+TAG=m2 bash scripts/build-images.sh
+docker pull apache/kafka:3.9.0
+docker pull docker.io/prom/prometheus:v3.5.0
+docker pull docker.io/grafana/grafana:12.1.0
+docker pull docker.io/grafana/tempo:2.8.2
+docker pull docker.io/grafana/loki:3.5.3
+docker pull docker.io/grafana/alloy:v1.10.2
+docker pull docker.io/otel/opentelemetry-collector-contrib:0.131.0
+docker pull docker.io/citusdata/citus:13.0.1-pg16
+
+docker save -o /tmp/bnpb-images.tar \
+  apache/kafka:3.9.0 \
+  docker.io/citusdata/citus:13.0.1-pg16 \
+  docker.io/prom/prometheus:v3.5.0 \
+  docker.io/grafana/grafana:12.1.0 \
+  docker.io/grafana/tempo:2.8.2 \
+  docker.io/grafana/loki:3.5.3 \
+  docker.io/grafana/alloy:v1.10.2 \
+  docker.io/otel/opentelemetry-collector-contrib:0.131.0 \
+  $(docker images --format '{{.Repository}}:{{.Tag}}' \
+    | grep '^bnpb-gateway/.*:m2$')
+
+# NODES is a space-separated list of SSH destinations for the three nodes.
+: "${NODES:?set NODES to 'user@control user@app user@store'}"
+for host in $NODES; do
+  scp /tmp/bnpb-images.tar "$host:/tmp/bnpb-images.tar"
+  ssh "$host" 'sudo k3s ctr images import /tmp/bnpb-images.tar && rm -f /tmp/bnpb-images.tar'
+done
+```
+
+Siapkan Secret asli di luar git:
+
+```bash
+cp deploy/secrets.example.yaml deploy/secrets.yaml
+# isi INTERNAL_API_KEY, token PVMBG/BMKG, P4_FEED_TOKEN, dan password aplikasi
+
+# Ganti dengan nama node Anda; tidak ada nama node/IP di manifest.
+bash scripts/label-nodes.sh <control-node> <app-node> <store-node>
+bash scripts/citus-secrets.sh
+kubectl apply -k deploy
+kubectl -n sistem-informasi-kebencanaan-bnpb apply -f deploy/secrets.yaml
+kubectl -n sistem-informasi-kebencanaan-bnpb rollout restart \
+  deployment/aggregator deployment/client-api deployment/auth \
+  deployment/satellite-processor deployment/field-notifier deployment/grafana
+```
+
+Jangan menjalankan `kubectl apply -k deploy` lagi setelah Secret asli dipasang,
+karena `deploy/11-secrets.dev.yaml` akan menimpa token development. Untuk
+mengganti token feed satelit tanpa menyimpannya di git:
+
+```bash
+kubectl -n sistem-informasi-kebencanaan-bnpb patch secret bnpb-secrets \
+  --type merge -p '{"stringData":{"P4_FEED_TOKEN":"<token>"}}'
+kubectl -n sistem-informasi-kebencanaan-bnpb rollout restart \
+  deployment/satellite-processor
+```
+
+Untuk P5 dengan profil ujian, pasang overlay sensor dan Secret `pantai-key`
+sesuai key yang diberikan:
+
+```bash
+kubectl apply -k deploy/sensor-pantai/overlays/exam
+```
+
+Verifikasi deployment:
+
+```bash
+kubectl -n sistem-informasi-kebencanaan-bnpb get pods -o wide
+kubectl -n sistem-informasi-kebencanaan-bnpb get pvc
+kubectl -n sistem-informasi-kebencanaan-bnpb get pdb
+kubectl -n tester-agent get daemonset,pods
+kubectl -n tester-agent exec daemonset/tester-agent -- /app list
+```
+
+Untuk P3/P4 lokal:
+
+```bash
+docker compose down -v
+docker compose up --build -d
+```
+
+Port-forward yang tetap hidup selama scaling/rolling update:
+
+```bash
+bash scripts/port-forward-loop.sh client-api 9080 8080 >/tmp/pf-client.log 2>&1 &
+bash scripts/port-forward-loop.sh aggregator 18085 8085 >/tmp/pf-aggregator.log 2>&1 &
+bash scripts/port-forward-loop.sh field-notifier 18097 8080 >/tmp/pf-notifier.log 2>&1 &
+```
+
+### Observability
+
+Stack observability sudah menjadi bagian dari `deploy/kustomization.yaml`, jadi
+`kubectl apply -k deploy` juga memasang Prometheus, Grafana, Tempo, Loki, Alloy,
+dan OTel Collector. Pod observability memakai `bnpb.io/app-eligible=true` dari
+`scripts/label-nodes.sh`:
+
+```bash
+kubectl -n sistem-informasi-kebencanaan-bnpb create secret generic bnpb-grafana-auth \
+  --from-literal=admin-password='admin' --dry-run=client -o yaml | kubectl apply -f -
+
+# Observability saja; jangan apply -k deploy lagi setelah Secret asli dipasang.
+kubectl apply --validate=false -k deploy/kubernetes/observability
+kubectl -n sistem-informasi-kebencanaan-bnpb rollout status \
+  deployment/prometheus deployment/grafana deployment/tempo deployment/loki \
+  deployment/alloy deployment/otel-collector --timeout=300s
+```
+
+Akses UI:
+
+```bash
+bash scripts/port-forward-loop.sh grafana 3000 3000 >/tmp/pf-grafana.log 2>&1 &
+bash scripts/port-forward-loop.sh prometheus 19090 9090 >/tmp/pf-prometheus.log 2>&1 &
+# Grafana: http://127.0.0.1:3000  (admin / password dari Secret bnpb-grafana-auth)
+# Prometheus: http://127.0.0.1:19090
+```
+
+Cek target Prometheus:
+
+```bash
+curl -s 'http://127.0.0.1:19090/api/v1/targets?state=active' \
+  | jq -r '.data.activeTargets[] | [.labels.job,.health] | @tsv'
+```
+
+### Milestone 2 - Problem 1: Distributed canonical storage (Citus)
+
+P1 memakai Citus murni tanpa Patroni. Tiga node penyimpanan adalah PostgreSQL
+primary biasa; durability berasal dari **Citus shard replication factor 2**.
+Manifest tidak menyebut nama node atau IP pod. Kontraknya adalah label peran:
+
+```bash
+bash scripts/label-nodes.sh <control-node> <app-node> <store-node>
+```
+
+Script tersebut memasang:
+
+```text
+bnpb.io/role=control|app|store
+bnpb.io/app-eligible=true pada app/store
+```
+
+Susunan storage:
+
+```text
+citus-coordinator  group 0  node role=control
+citus-worker-1     group 1  node role=app
+citus-worker-2     group 2  node role=store
+citus-worker-3     group 3  node role=app (replicas 0; dinyalakan untuk uji node addition)
+```
+
+Semua koneksi memakai Service DNS:
+
+```text
+citus-coordinator:5432
+citus-worker-1:5432
+citus-worker-2:5432
+citus-worker-3:5432
+canonical-api:8080
+coordinator:8080
+```
+
+Tidak ada IP pod di ConfigMap, Secret, atau metadata Citus.
+
+#### Setup portable
+
+```bash
+export KUBECONFIG=/path/ke/kubeconfig-cluster
+TAG=m2 bash scripts/build-images.sh
+# impor image ke semua node k3s, atau push ke registry lalu ubah image di overlay
+
+bash scripts/label-nodes.sh node-control node-app node-store
+bash scripts/citus-secrets.sh
+
+# baseline aplikasi + Citus + adapter + bootstrap (satu command)
+kubectl apply -k deploy
+
+kubectl -n sistem-informasi-kebencanaan-bnpb wait \
+  --for=condition=complete job/citus-init --timeout=300s
+kubectl -n sistem-informasi-kebencanaan-bnpb rollout status \
+  deployment/canonical-api deployment/aggregator --timeout=180s
+```
+
+Image `bnpb-gateway/aggregator:m2` dipakai untuk `canonical-api` dan
+`canonical-admin`; Dockerfile `services/bnpb/Dockerfile` membangun keduanya.
+Job `citus-init` membuat database/role/extension, mendaftarkan worker dengan
+nama Service, lalu menjalankan migrasi schema embedded.
+
+`READ_CACHE_TTL` default 5 detik; cache memakai singleflight dan stale-on-error,
+sedangkan freshness sumber diperbarui di background, bukan di request path.
+
+#### Uji P1
+
+```bash
+kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator-0 -- \
+  psql -h 127.0.0.1 -U postgres -d canonical -At <<'SQL'
+SELECT count(*) FROM pg_dist_shard WHERE logicalrelid='canonical.events'::regclass;
+SELECT count(*) FROM pg_dist_placement p JOIN pg_dist_node n USING(groupid)
+ WHERE n.isactive AND p.shardstate=1;
+SELECT canonical.replication_ready(), canonical.primaries_ready();
+SQL
+```
+
+Harapan: **12 shard, 48 placement aktif, health `t|t`**.
+
+```bash
+kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/canonical-api 18080:8080
+curl -s 'http://127.0.0.1:18080/v1/events?limit=5' | jq '{items:(.items|length),next_cursor,partial}'
+curl -s 'http://127.0.0.1:18080/v1/events?limit=5&cursor=<next_cursor>' | jq '{items:(.items|length),partial}'
+curl -s 'http://127.0.0.1:18080/internal/audit/events?limit=5' | jq '{items:(.items|length),partial,unavailable_units}'
+curl -s 'http://127.0.0.1:18080/internal/audit/checksum?source=SATELIT' | jq '{count,checksum,partial}'
+# Dashboard P1 (bukan dashboard metrik):
+# http://127.0.0.1:18080/analytics
+```
+
+Dashboard memakai jalur audit yang sama dan menampilkan banner
+`Data belum lengkap` beserta `unavailable_units` saat worker tidak terjangkau.
+
+Node loss (worker dimatikan, satu salinan sementara). Untuk simulasi node
+hilang sesungguhnya, matikan/hentikan VM node-store sehingga local-path di
+node itu ikut hilang; jangan menghapus PVC node lain yang masih hidup.
+
+```bash
+kubectl -n sistem-informasi-kebencanaan-bnpb scale statefulset citus-worker-2 --replicas=0
+kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator-0 -- \
+  psql -h 127.0.0.1 -U postgres -d canonical -c \
+  "SELECT citus_disable_node('citus-worker-2',5432,synchronous:=true);
+   UPDATE canonical.recovery SET durability='single_copy', fenced_node='citus-worker-2'
+   WHERE singleton;"
+```
+
+Tulis/read harus tetap berhasil dengan `durability=single_copy`. Setelah worker
+hidup lagi (`kubectl scale statefulset citus-worker-2 --replicas=1`), jalankan
+`citus_activate_node('citus-worker-2',5432)`, set `durability='replicated'`,
+lalu rebalance/verifikasi 48 placement.
+
+Node addition:
+
+```bash
+kubectl -n sistem-informasi-kebencanaan-bnpb scale statefulset citus-worker-3 --replicas=1
+# tunggu Ready, lalu jalankan ulang job citus-init
+kubectl -n sistem-informasi-kebencanaan-bnpb delete job citus-init --ignore-not-found
+kubectl apply -f deploy/kubernetes/base/citus-init.yaml
+kubectl -n sistem-informasi-kebencanaan-bnpb wait --for=condition=complete job/citus-init --timeout=300s
+```
+
+#### Hasil P1 (yang sudah dibuktikan pada cluster demo)
+
+| Kriteria | Bukti |
+|---|---|
+| Multi-node storage | 3 node aktif + worker tambahan untuk uji addition |
+| Sharding | 12 shard `canonical.events`, RF2 |
+| Replikasi | 48 placement aktif |
+| Cross-shard pagination | `/v1/events` cursor halaman 5+5, `partial=false` |
+| Node loss | read tetap jalan, write `201 durability=single_copy` |
+| Node addition | worker-3 ditambahkan dan placement tetap RF2 |
+| Analytics dashboard | `canonical-api:8080/analytics` dengan agregasi hazard/severity/area dan `partial` |
+| Adapter | Aggregator 3/3 Ready; `STORAGE_URL=http://canonical-api:8080` |
+
+`canonical-store` hanya Service alias kompatibilitas untuk script lama; tidak
+ada lagi Deployment JSON canonical-store.
+
+### Milestone 2 - Problem 1 (legacy): Interoperabilitas & evolusi skema
+
+```bash
+kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/pvmbg 18082:8082 &
+PVMBG_ADMIN_USERNAME="$(kubectl -n sistem-informasi-kebencanaan-bnpb get secret bnpb-secrets -o jsonpath='{.data.PVMBG_ADMIN_USERNAME}' | base64 -d)"
+PVMBG_ADMIN_PASSWORD="$(kubectl -n sistem-informasi-kebencanaan-bnpb get secret bnpb-secrets -o jsonpath='{.data.PVMBG_ADMIN_PASSWORD}' | base64 -d)"
+PVMBG_TOKEN="$(kubectl -n sistem-informasi-kebencanaan-bnpb get secret bnpb-secrets -o jsonpath='{.data.PVMBG_TOKEN}' | base64 -d)"
+
+curl -s -u "$PVMBG_ADMIN_USERNAME:$PVMBG_ADMIN_PASSWORD" \
+  -X POST http://127.0.0.1:18082/admin/schema-version \
+  -H 'Content-Type: application/json' -d '{"enabled":true}' | jq .
+curl -s -H "Authorization: Bearer $PVMBG_TOKEN" \
+  'http://127.0.0.1:18082/volcanic-reports' \
+  | jq '.reports[0] | {report_id,confidence_level}'
+```
+
+Ulangi dengan `{"enabled":false}` lalu `{"enabled":true}`. Field harus hilang
+dan muncul kembali tanpa restart. Detail ada di Bagian 8.
+
+### Milestone 2 - Problem 2: Ketahanan Aggregator
 
 Problem 2 memakai kontrak kanonik M2 pada `contracts/m2/README.md` dan berbagi
 ingest pipeline dengan Problem 3/4.
+
+```bash
+export BASE_URL=http://127.0.0.1:9080
+export AGG_URL=http://127.0.0.1:18085
+export INTERNAL_KEY="$(kubectl -n sistem-informasi-kebencanaan-bnpb get secret bnpb-secrets -o jsonpath='{.data.INTERNAL_API_KEY}' | base64 -d)"
+export SKIP_TTL_ENV=1
+
+./loadtest/duplicate-detector.sh
+./scripts/integration-pause-leader.sh
+./loadtest/scaling.sh
+./loadtest/throughput.sh
+./loadtest/rolling-update.sh
+```
+
+Kriteria 5 (freeze VM) memakai `VBoxManage controlvm <vm> savestate` lalu
+`startvm` dan `./loadtest/duplicate-detector.sh`. Detail ada di Bagian 10.
 
 Komponen:
 
@@ -693,40 +1042,11 @@ Komponen:
 - `services/bnpb` — poller BMKG/PVMBG/Sensor dengan leader election, readiness, graceful drain, audit proxy, dan kepemilikan aktif-pasif per sumber.
 - `services/client-api` — titik masuk baca stateless yang dipakai load test.
 
-### Jalankan secara lokal
+### Menjalankan Problem 2
 
-```bash
-cp .env.example .env
-make dev-up
-# coordinator :8099  canonical-store :8095  ingest :8094  sensor :8087
-```
-
-### Jalankan di Kubernetes
-
-```bash
-./scripts/build-images.sh
-
-# kind: load the application images into every node
-bash scripts/load-kind-images.sh
-
-# The provided sensor is pinned by digest. On a real VM/k3s node it can be
-# pulled by the kubelet directly. If a kind/Docker image store rejects the
-# digest reference, use a local tag for development only:
-# docker pull sustuna/sensor-pantai@sha256:51fbd90d3891ad6e9f5768ad330ffb65205644cb29e50da65c7538f2e0b4397d
-# docker tag sustuna/sensor-pantai@sha256:51fbd90d3891ad6e9f5768ad330ffb65205644cb29e50da65c7538f2e0b4397d sustuna/sensor-pantai:dev
-# kind load docker-image --name bnpb-dev sustuna/sensor-pantai:dev
-# kubectl -n sistem-informasi-kebencanaan-bnpb set image deployment/sensor-pantai sensor=sustuna/sensor-pantai:dev
-
-# k3s/VM: import the same images into each node, for example:
-# docker save bnpb-gateway/aggregator:m2 | k3s ctr images import -
-
-make k8s-up
-kubectl -n sistem-informasi-kebencanaan-bnpb get pods -o wide
-```
-
-Namespace, label `role`, kelas memori, penyimpanan local-PV, PDB, topology spread,
-dan satu Service Aggregator tersedia di `deploy/`. `make k8s-up` only applies
-manifests; it does not distribute images.
+Gunakan setup di atas. Untuk stack lokal jalankan `cp .env.example .env` lalu
+`make dev-up`. Untuk cluster jalankan `kubectl apply -k deploy` setelah image dan
+Secret disiapkan.
 
 ### Pemeriksaan kriteria P2
 
@@ -1490,20 +1810,26 @@ kubectl -n sistem-informasi-kebencanaan-bnpb apply -f pantai-key.secret.yaml
 kubectl kustomize deploy/sensor-pantai/overlays/exam | kubectl apply -f -
 ```
 
-### Pemeriksaan kriteria P5
+### Setup P5
 
-Prasyarat: `kubectl`, `curl`, `jq`, `k6`, dan shell Unix/Git Bash. Jalankan di
-cluster demo. Biarkan port-forward berikut tetap berjalan:
+P5 memakai setup bersama di **Bagian 10 - Setup sebelum Problem 1**: image,
+Secret, deployment, dan verifikasi cluster. Setelah setup tersebut selesai,
+jalankan port-forward yang tahan restart dan ambil kredensial dari Secret:
 
 ```bash
-kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/client-api 9080:8080 &
-kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/aggregator 18085:8085 &
-kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/field-notifier 18097:8080 &
+bash scripts/port-forward-loop.sh client-api 9080 8080 >/tmp/pf-client.log 2>&1 &
+bash scripts/port-forward-loop.sh aggregator 18085 8085 >/tmp/pf-aggregator.log 2>&1 &
+bash scripts/port-forward-loop.sh field-notifier 18097 8080 >/tmp/pf-notifier.log 2>&1 &
+
 export BASE_URL=http://127.0.0.1:9080
 export AGG_URL=http://127.0.0.1:18085
-export INTERNAL_KEY='<INTERNAL_API_KEY dari bnpb-secrets>'
-export AUDIT_TOKEN='<AUDIT_TOKEN dari bnpb-secrets>'
+export INTERNAL_KEY="$(kubectl -n sistem-informasi-kebencanaan-bnpb get secret bnpb-secrets -o jsonpath='{.data.INTERNAL_API_KEY}' | base64 -d)"
+export AUDIT_TOKEN="$(kubectl -n sistem-informasi-kebencanaan-bnpb get secret bnpb-secrets -o jsonpath='{.data.AUDIT_TOKEN}' | base64 -d)"
 ```
+
+Prasyarat perintah: `kubectl`, `curl`, `jq`, `k6`, dan shell Unix/Git Bash.
+
+### Pemeriksaan kriteria P5
 
 **Kriteria 1 — peringatan kritis, p95 ≤ 5 detik, nol hilang**
 
@@ -1625,20 +1951,21 @@ pemulihan cache basi terjadi tanpa intervensi manual. Tidak ada `kill-pod` atau
 
 **Kriteria 7 — dashboard, metrik, dan jejak permintaan**
 
-Dashboard Grafana **tidak termasuk** `deploy/` saat ini. ConfigMap dashboard
-tersedia, tetapi Service Grafana hanya ada jika kelompok memasang monitoring
-stack sendiri.
+Grafana, Prometheus, Tempo, Loki, dan OTel Collector terpasang melalui
+`deploy/kubernetes/observability` dan sudah termasuk dalam `kubectl apply -k deploy`.
 
 ```bash
-kubectl -n sistem-informasi-kebencanaan-bnpb get cm bnpb-grafana-dashboard
-# Jika Grafana sudah dipasang:
-kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/grafana 3000:3000
-# Buka dashboard BNPB M2; korelasikan request lewat trace_id/correlation ID di log.
+bash scripts/port-forward-loop.sh grafana 3000 3000 >/tmp/pf-grafana.log 2>&1 &
+bash scripts/port-forward-loop.sh prometheus 19090 9090 >/tmp/pf-prometheus.log 2>&1 &
+# Buka http://127.0.0.1:3000, login admin, lalu buka dashboard BNPB M2.
+# Korelasikan request lewat trace_id/correlation ID di log.
 ```
 
-Tanpa Grafana/Prometheus, bukti metrik dan trace tersedia dari:
+Bukti metrik dan trace juga dapat diambil langsung:
 
 ```bash
+curl -s http://127.0.0.1:19090/api/v1/targets?state=active \
+  | jq -r '.data.activeTargets[] | [.labels.job,.health] | @tsv'
 curl -s "$AGG_URL/metrics" | grep -E 'http_requests_total|sensor_|lease_'
 curl -s http://127.0.0.1:18097/metrics | grep -E 'critical_alert|field_notifier'
 kubectl -n sistem-informasi-kebencanaan-bnpb logs deploy/aggregator --tail=100 \
@@ -1647,21 +1974,19 @@ kubectl -n sistem-informasi-kebencanaan-bnpb logs deploy/aggregator --tail=100 \
 
 **Kriteria 8 — anggaran SLO**
 
-Prometheus juga tidak termasuk `deploy/`; jangan menjalankan perintah
-`svc/prometheus` kecuali monitoring stack sudah dipasang. Dengan metrik yang ada:
+Prometheus tersedia dari Service `prometheus` dan sudah menerima scrape dari
+Aggregator, client-api, auth, canonical-store, coordinator, field-notifier, dan
+satellite-processor.
 
 ```bash
 curl -s http://127.0.0.1:18097/metrics \
   | grep -E 'critical_alert_pipeline_seconds_(bucket|count|sum)|critical_outbox'
+
+curl -sG http://127.0.0.1:19090/api/v1/query \
+  --data-urlencode 'query=histogram_quantile(0.95, sum(rate(critical_alert_pipeline_seconds_bucket[24h])) by (le))'
 ```
 
 Anggaran: `used = jumlah event > 5 detik / (0,005 × jumlah event kritis pada
 window)`. Gunakan `critical_alert_pipeline_seconds_count` sebagai penyebut dan
 `critical_outbox_delivered_total`/`enqueued_total` untuk memeriksa kehilangan
-event. Jika Prometheus dipasang, query yang setara adalah:
-
-```bash
-kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/prometheus 19090:9090
-curl -sG http://127.0.0.1:19090/api/v1/query \
-  --data-urlencode 'query=histogram_quantile(0.95, sum(rate(critical_alert_pipeline_seconds_bucket[24h])) by (le))'
-```
+event.

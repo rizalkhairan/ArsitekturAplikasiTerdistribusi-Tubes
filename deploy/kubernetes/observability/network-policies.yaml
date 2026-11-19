@@ -1,0 +1,100 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: telemetry-prometheus
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+      app.kubernetes.io/part-of: bnpb
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: grafana
+          app.kubernetes.io/part-of: bnpb
+    ports:
+    - protocol: TCP
+      port: 9090
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: telemetry-loki
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+      app.kubernetes.io/part-of: bnpb
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: alloy
+          app.kubernetes.io/part-of: bnpb
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: grafana
+          app.kubernetes.io/part-of: bnpb
+    ports:
+    - protocol: TCP
+      port: 3100
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: telemetry-tempo
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: tempo
+      app.kubernetes.io/part-of: bnpb
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: grafana
+          app.kubernetes.io/part-of: bnpb
+    ports:
+    - protocol: TCP
+      port: 3200
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: otel-collector
+          app.kubernetes.io/part-of: bnpb
+    ports:
+    - protocol: TCP
+      port: 4317
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: telemetry-otel-collector
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/part-of: bnpb
+  policyTypes:
+  - Ingress
+  ingress:
+  # Workload labels drifted from the app.kubernetes.io/* names this policy was
+  # written for: the aggregator pods are only app=aggregator and the coordinator
+  # only app=coordinator, so every span export was silently dropped. The
+  # collector accepts OTLP only, so allow the namespace instead of chasing names.
+  - from:
+    - podSelector: {}
+    ports:
+    - protocol: TCP
+      port: 4318

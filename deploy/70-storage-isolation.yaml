@@ -1,0 +1,78 @@
+# Storage isolation (Ketentuan 8): the Citus data pods, which carry
+# role=store, accept PostgreSQL traffic only from the service that owns the
+# canonical data (canonical-api) and from the Citus cluster itself. Selecting
+# these pods replaces the namespace default allow, so every other component —
+# aggregator, client-api, consumers, mocks — is refused at the network layer
+# rather than merely asked not to connect.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: citus-owner-only
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  podSelector:
+    matchLabels:
+      citus: "true"
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: canonical-api
+      ports:
+        - {protocol: TCP, port: 5432}
+    - from:
+        - podSelector:
+            matchLabels:
+              citus: "true"
+      ports:
+        - {protocol: TCP, port: 5432}
+    # The one-shot schema/registration job is part of the storage service.
+    - from:
+        - podSelector:
+            matchLabels:
+              job-name: citus-init
+      ports:
+        - {protocol: TCP, port: 5432}
+    # The Tester Agent must reach every pod it targets; scoping this here keeps
+    # the allowance from turning into a namespace-wide default deny.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tester-agent
+---
+# The coordinator holds leases, checkpoints and the critical-alert outbox on
+# its own PVC. Only the Aggregator may call it, and nothing may reach its
+# PostgreSQL port from another pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: coordinator-owner-only
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  podSelector:
+    matchLabels:
+      app: coordinator
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: aggregator
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: canonical-api
+      ports:
+        - {protocol: TCP, port: 8080}
+    - from:
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - {protocol: TCP, port: 8080}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tester-agent

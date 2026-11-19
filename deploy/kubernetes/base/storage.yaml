@@ -1,0 +1,51 @@
+# Portable application PVCs. The k3s local-path provisioner creates node-local
+# hostPath volumes on first use; no node name or host path is embedded here.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bnpb-m1-data
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources: {requests: {storage: 5Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: auth-data
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources: {requests: {storage: 1Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bmkg-data
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources: {requests: {storage: 1Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvmbg-data
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources: {requests: {storage: 1Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kafka-data
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources: {requests: {storage: 10Gi}}

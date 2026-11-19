@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -69,6 +71,7 @@ type Store struct {
 	path      string
 	state     diskState
 	request   []RequestLog
+	dirty     atomic.Bool
 }
 
 func newStore(path string) (*Store, error) {
@@ -90,8 +93,30 @@ func newStore(path string) (*Store, error) {
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
+	go s.persistLoop()
 	return s, nil
 }
+
+// persistLoop coalesces durable snapshots. The previous implementation rewrote
+// the whole JSON document on every mutation; under a burst from a sensor stream
+// that turned one disk write per event into the store's dominant CPU cost.
+// Mutations are still serialized in memory, while snapshots are written at most
+// once per interval and only when the state changed.
+func (s *Store) persistLoop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		if !s.dirty.Swap(false) {
+			continue
+		}
+		if err := s.persistSnapshot(); err != nil {
+			s.dirty.Store(true)
+			log.Printf(`{"level":"error","service":"canonical-store","msg":"snapshot failed","error":%q}`, err.Error())
+		}
+	}
+}
+
+func (s *Store) markDirty() { s.dirty.Store(true) }
 
 func (s *Store) persistSnapshot() error {
 	s.persistMu.Lock()
@@ -101,7 +126,7 @@ func (s *Store) persistSnapshot() error {
 	// slow disk write happens after the lock is released, so GETs are not
 	// blocked behind a full-state rewrite.
 	s.mu.RLock()
-	raw, err := json.MarshalIndent(s.state, "", " ")
+	raw, err := json.Marshal(s.state)
 	s.mu.RUnlock()
 	if err != nil {
 		return err
@@ -142,9 +167,7 @@ func (s *Store) mutate(source, ref string, version int64, operation, partition s
 	if err != nil {
 		return stored, created, replayed, err
 	}
-	if err := s.persistSnapshot(); err != nil {
-		return storedEvent{}, false, false, err
-	}
+	s.markDirty()
 	return stored, created, replayed, nil
 }
 
