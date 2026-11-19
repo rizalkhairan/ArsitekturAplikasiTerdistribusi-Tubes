@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/canonical"
+	"github.com/rizalkhairan/distributed-system/bnpb/internal/messaging"
 )
 
 type legacyAuthority struct {
@@ -98,6 +99,13 @@ func main() {
 	}
 	authority := newAuthorityClient(env("AUTHORITY_URL", os.Getenv("COORDINATOR_URL")), os.Getenv("COORDINATOR_TOKEN"))
 	s := &server{store: store, cache: newListCache(cacheTTL), authority: authority}
+	if os.Getenv("CANONICAL_OUTBOX_ENABLED") != "false" {
+		interval, err := time.ParseDuration(env("CANONICAL_OUTBOX_INTERVAL", "1s"))
+		if err != nil || interval <= 0 {
+			log.Fatal("CANONICAL_OUTBOX_INTERVAL must be a positive duration")
+		}
+		startOutboxPublisher(store, strings.Split(env("KAFKA_BROKERS", "kafka:9092"), ","), interval)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 	mux.HandleFunc("GET /readyz", s.ready)
@@ -116,6 +124,30 @@ func main() {
 	addr := env("ADDR", ":8080")
 	log.Printf("canonical-api listening addr=%s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
+}
+
+// startOutboxPublisher drains canonical.outbox to Kafka. Store.Publish takes a
+// coordinator advisory lock, so replicas do not double-publish, and a failed
+// send leaves the row unpublished for the next tick to retry.
+func startOutboxPublisher(store *canonical.Store, brokers []string, interval time.Duration) {
+	publisher, err := messaging.NewKafkaPublisher(brokers, "canonical-api")
+	if err != nil {
+		log.Printf("canonical outbox disabled: kafka publisher unavailable: %v", err)
+		return
+	}
+	log.Printf("canonical outbox publisher started brokers=%v interval=%s", brokers, interval)
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			err := store.Publish(ctx, publisher.Publish)
+			cancel()
+			if err != nil {
+				log.Printf("canonical outbox publish failed: %v", err)
+			}
+		}
+	}()
 }
 
 func (s *server) ready(w http.ResponseWriter, r *http.Request) {

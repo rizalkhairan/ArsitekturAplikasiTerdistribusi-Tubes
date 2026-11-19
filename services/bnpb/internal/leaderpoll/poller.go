@@ -101,10 +101,29 @@ func (p *Poller) pollBMKG(ctx context.Context, lease coordclient.Lease, state *b
 	}
 	// Same bounded-prefix rule as PVMBG: the source returns everything since the
 	// cursor ordered by occurred_at, and a single transient failure would replay
-	// an unbounded batch. Warnings stay whole: they are rare, and slicing them
-	// independently could separate a warning from its event.
+	// an unbounded batch. A warning trail is 30 minutes behind its event, so the
+	// warning cursor can lead the seismic one; keep every event a fetched warning
+	// points at, or the merge lookup fails on an event beyond the prefix that is
+	// not stored yet.
 	if limit := p.cfg.BMKGBatchLimit; limit > 0 && len(events) > limit {
-		events = events[:limit]
+		keep := events[:limit]
+		kept := make(map[string]bool, len(keep))
+		for _, event := range keep {
+			kept[event.EventId] = true
+		}
+		for _, warning := range warnings {
+			if kept[warning.RelatedEventId] {
+				continue
+			}
+			for _, event := range events[limit:] {
+				if event.EventId == warning.RelatedEventId {
+					keep = append(keep, event)
+					kept[event.EventId] = true
+					break
+				}
+			}
+		}
+		events = keep
 	}
 	lookup := func(ctx context.Context, source, refID string) (database.HazardEvent, error) {
 		event, err := p.store.Get(ctx, refID)
