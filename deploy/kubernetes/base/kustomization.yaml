@@ -10,3 +10,6 @@ resources:
   - identities.yaml
   - network-policies.yaml
   - admission.yaml
+  - citus.yaml
+  - citus-init.yaml
+  - canonical-api.yaml

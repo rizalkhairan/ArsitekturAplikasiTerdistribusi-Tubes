@@ -13,7 +13,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: satellite-processor
-  labels: {app: satellite-processor, role: consumer}
+  labels: {app: satellite-processor, role: broker}
 spec:
   replicas: 1
   strategy: {type: Recreate}
@@ -21,7 +21,7 @@ spec:
     matchLabels: {app: satellite-processor}
   template:
     metadata:
-      labels: {app: satellite-processor, role: consumer}
+      labels: {app: satellite-processor, role: broker}
     spec:
       containers:
         - name: satellite-processor
@@ -38,7 +38,7 @@ spec:
             - {name: SATELLITE_BATCH_SIZE, value: "128"}
             - {name: SATELLITE_RECONNECT_MIN, value: 1s}
             - {name: SATELLITE_RECONNECT_MAX, value: 30s}
-            - {name: CANONICAL_API_URL, value: "http://canonical-store:8080"}
+            - {name: CANONICAL_API_URL, value: "http://canonical-api:8080"}
             - name: CANONICAL_WRITE_TOKEN
               valueFrom: {secretKeyRef: {name: bnpb-secrets, key: STORAGE_TOKEN}}
             - {name: CANONICAL_PARTITION, value: SATELIT}

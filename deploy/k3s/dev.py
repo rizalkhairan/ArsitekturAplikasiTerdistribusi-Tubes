@@ -63,11 +63,6 @@ def render(tag="dev"):
     # NodePort is omitted: dev access is via port-forward, avoiding host port collisions.
     patches.append({"target": {"kind": "Service", "name": "client-api"}, "patch": json.dumps([
         {"op": "replace", "path": "/spec/type", "value": "ClusterIP"}, {"op": "remove", "path": "/spec/ports/0/nodePort"}])})
-    if os.getenv("CANONICAL_STORAGE") == "postgres":
-        if count() != 3:
-            raise ValueError("Canonical replicas require DEV_NODES=3; do not fold replicas onto one node")
-        import canonical
-        return canonical.render(tag, patches)
     overlay = {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "resources": ["../base"],
                "patches": patches, "images": [{"name": "bnpb.local/" + name, "newTag": tag} for name in manage.APPS]}
     with tempfile.TemporaryDirectory(prefix=".dev-render-", dir=manage.ROOT / "deploy/kubernetes") as directory:
@@ -101,10 +96,8 @@ def docker_ready():
     info = json.loads(manage.run(["docker", "info", "--format", "{{json .}}"], capture=True).stdout)
     # Budget application requests, six telemetry pods, policy enforcement and Kubernetes.
     minimum = {1: 3584, 2: 3584, 3: 4608}[count()] * 1024 * 1024
-    if os.getenv("CANONICAL_STORAGE") == "postgres":
-        minimum += 3584 * 1024 * 1024
     if info.get("MemTotal", 0) < minimum:
-        setting = 9 if os.getenv("CANONICAL_STORAGE") == "postgres" else (4 if count() <= 2 else 5)
+        setting = 4 if count() <= 2 else 5
         raise ValueError(f"Docker has too little memory for this profile. Allocate at least {setting} GiB in Docker Desktop Resources, apply/restart, and retry")
 
 
@@ -156,8 +149,6 @@ def up():
     # The native baseline schedules on its control plane. Match that behavior in kind.
     control = node_names()[0]
     info = wait_control_plane()
-    from canonical import check_backend
-    check_backend(kube)
     taints = [t for t in info.get("spec", {}).get("taints", []) if t["key"] != "node-role.kubernetes.io/control-plane"]
     kube("patch", "node", control, "--type=merge", "-p", json.dumps({"spec": {"taints": taints}}))
     manage.run(["kind", "load", "image-archive", archive, "--name", NAME])
@@ -177,13 +168,7 @@ def up():
     from security import install
     install(kube)
     manage.apply_secrets(manage.credentials(), apply=kube)
-    if os.getenv("CANONICAL_STORAGE") == "postgres":
-        from canonical import apply_secrets
-        apply_secrets(kube)
     kube("apply", "-f", "-", data=manifests)
-    if os.getenv("CANONICAL_STORAGE") == "postgres":
-        from canonical import initialize
-        initialize(kube, tag)
     kube("-n", manage.NS, "rollout", "status", "deployment/kafka", "--timeout=240s")
     kube("-n", manage.NS, "delete", "job", "topic-init", "--ignore-not-found", "--wait=true")
     kube("apply", "-f", manage.ROOT / "deploy/kubernetes/base/topic-init.yaml")

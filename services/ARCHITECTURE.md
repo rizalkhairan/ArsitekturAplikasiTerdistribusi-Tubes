@@ -1,49 +1,27 @@
 # Milestone 2 architecture
 
-**Design decisions; implementation and failure behavior remain to be validated.**
-The system uses PostgreSQL/Citus with Patroni on one K3s cluster. The existing
-Aggregator owns canonical storage and query logic; Client-Facing API remains
-separate. Shared API contracts require agreement across the team.
+The system runs on one K3s cluster. The Aggregator owns canonical storage and
+query logic; the Client-Facing API remains a separate service. P1 storage is
+lean Citus without Patroni: Citus shard replication factor 2 provides the
+durable copies, and the coordinator remains the single SQL entry point.
 
 ## Deployment
 
-Three Kubernetes nodes with separate kernels provide the baseline topology.
-Names below identify logical roles; physical hosts, operating systems and VM
-allocations depend on the deployment environment.
-
-| Node | Role | Workloads |
-| --- | --- | --- |
-| `node-control` | K3s control plane + worker | Applications, datastore; preferred telemetry location |
-| `node-app` | K3s worker | Applications and datastore |
-| `node-store` | K3s worker | Datastore and one Aggregator |
-
-Three Aggregators run initially, one per node, behind one entry point.
-Control-plane/application nodes have `app-eligible=true`; all nodes have
-`store-eligible=true` and `aggregator-eligible=true`. Enforce eligibility
-with node selectors/affinity and separate each database primary/standby pair
-across nodes. Aggregator placement must support the 3 → 5 → 2 test:
-unconditional required Pod anti-affinity would prevent five replicas.
-
-The storage node also runs necessary system components and the unchanged
-Tester Agent. All locally managed services—including mocks, broker,
-processors, sensor and telemetry—run in Kubernetes. The satellite feed is
-external; clients and load generators access the cluster externally.
-
-Use stable private node addresses and verify node and cross-node Pod
-connectivity. Application namespace: `sistem-informasi-kebencanaan-bnpb`.
-Apply the specification's role labels and resource declarations; install
-the supplied Tester Agent unchanged on every node. Store data uses local
-PVs/hostPath, with private directories per node.
-
-Baseline destructive tests target worker-only nodes, retaining the control
-plane. The specification permits broader scenarios with at least three nodes;
-this design provides no control-plane HA. Physical-host placement is
-specified in each deployment's topology declaration.
-
-## Services and ownership
+Nodes are identified by role labels, never by hostname or pod IP:
 
 ```text
-Browser / CLI --> Client-Facing API --> Aggregator replicas --> PostgreSQL/Citus
+bnpb.io/role=control   coordinator, application coordinator
+bnpb.io/role=app       application workloads, Citus worker 1/3
+bnpb.io/role=store     Citus worker 2, observability
+bnpb.io/app-eligible   true on app/store; false on control
+```
+
+No custom taint is applied, so the Tester Agent can run on every node.
+`scripts/label-nodes.sh` applies the role/label contract. Manifests use
+`local-path` dynamic PVCs, so no hostPath or device-specific path is embedded.
+
+```text
+Browser / CLI --> Client-Facing API --> Aggregator replicas --> canonical-api --> Citus
                          |                    |
                         Auth           poll BMKG/PVMBG/Sensor
                                               |
@@ -58,137 +36,71 @@ Satellite feed --> Stream processor --> Aggregator API
 Analytics --> Client-Facing API --> Aggregator --> distributed SQL
 ```
 
-`services/bnpb` remains the Aggregator; its internal modules handle storage,
-queries, audit and outbox publishing. Only its application credentials access
-canonical tables. Other services use authenticated Aggregator APIs.
-Replication and Patroni use separate internal credentials. Enforce ownership
-through credentials, network restrictions and private volumes.
+`services/bnpb` is the Aggregator. Its internal modules handle storage, queries,
+audit and outbox publishing. Other services use authenticated Aggregator APIs.
 
 | Team role | Responsibility |
 | --- | --- |
-| Data/platform (A) | Aggregator storage/query modules; replication/recovery integration; version/fencing enforcement; audit events/checksum/location; analytics; deployment, isolation and shared telemetry. |
-| Aggregator/resilience (B) | Pollers and ownership authority; Aggregator server/routing, replicas and entry point; sensor resilience, priority notifications, load tests and game day. |
-| Ingest/stream (C) | Broker/pipeline-state durability; raw envelopes, DLQ/replay, durable field reports, satellite processing/checkpoints and audit unprocessed. |
-
-A/B agree fencing and poll-window commits; A/C agree versions, retractions,
-retries, publisher ownership and outbox delivery. B integrates A's Audit
-handlers and proxies C's unprocessed route. C retains private pipeline state
-and uses Aggregator APIs for canonical mutations.
-
-Telemetry provides service metrics, cross-service traces and correlated
-logs. Use one instance per selected telemetry component with short retention;
-tools and durations remain open. Prefer control-plane-node placement to
-retain visibility through worker failures; telemetry has no HA guarantee.
+| Data/platform (A) | Aggregator storage/query modules; Citus placement and recovery; audit; analytics; deployment and telemetry. |
+| Aggregator/resilience (B) | Pollers and ownership authority; Aggregator routing, replicas and entry point; sensor resilience, priority notifications, load tests and game day. |
+| Ingest/stream (C) | Broker/pipeline-state durability; raw envelopes, DLQ/replay, durable field reports, satellite checkpoints and audit unprocessed. |
 
 ## Storage and partitioning
 
-Replace canonical SQLite with **PostgreSQL + Citus**. Citus provides hash
-sharding, SQL routing, distributed queries and rebalancing; PostgreSQL
-provides transactions and streaming replication; Patroni manages promotion
-and Citus routing updates. Automation must handle replica rebuilding,
-membership changes and rebalance operations.
+Citus provides hash sharding, SQL routing, distributed queries and rebalancing.
+The coordinator and three workers are plain PostgreSQL/Citus instances in
+StatefulSets. Application credentials use `canonical-api`; the schema job uses a
+separate administrator DSN.
 
-SQLite offers code reuse and an embedded runtime but leaves distributed
-replication, routing and recovery protocols to the application.
+The distribution column is `event_key`, the JSON-encoded exact
+`[source, source_ref_id]` pair. `events` and `outbox` share **12 hash shards**
+and replication factor **2**, giving 24 placements per table (48 total). The
+default is intentionally portable; it can be raised after capacity testing.
 
-| Partitioning | Geographic skew | Trade-off |
-| --- | --- | --- |
-| Geographic/range by area | Regional bursts concentrate data/writes | Efficient regional targeting; hot areas need splitting/balancing. |
-| Hash stable event identity — selected | Distinct events from a region spread across shards | Area/national queries span shards; updates to one event remain concentrated. |
+The Aggregator's legacy `List` path uses one sargable query with expression
+indexes. The `/v1/events` path keeps cursor traversal so partial shard coverage
+is explicit. Reads use a short-lived singleflight cache, background freshness
+refresh, stale-on-error and a bounded read bulkhead.
 
-The implemented distribution column is `event_key`, the JSON-encoded exact
-`[source, source_ref_id]` pair. Event and outbox tables include it in their
-primary keys and share 48 hash shards. This is an initial implementation
-default; dataset sizing and distribution evidence remain pending.
-
-Citus owns placement metadata; no application hash ring. Register new data
-workers and rebalance to redistribute existing shards. The coordinator also
-stores assigned shards. A Citus worker is a PostgreSQL instance, distinct
-from a Kubernetes worker node.
-
-Validate coordinator data placement with Patroni's integration and pin
-compatible PostgreSQL/Citus/Patroni versions.
-References: [distributed tables](https://docs.citusdata.com/en/stable/develop/reference_ddl.html),
-[node properties](https://docs.citusdata.com/en/stable/develop/api_udf.html#citus-set-node-property),
-[cluster management](https://docs.citusdata.com/en/stable/admin_guide/cluster_management.html).
+Citus owns placement metadata; there is no application hash ring. Register a
+new worker with its Service name, then rebalance. A Citus worker is a PostgreSQL
+instance, distinct from a Kubernetes worker node.
 
 ## Replication and recovery
 
-Physical replication copies an entire PostgreSQL instance. Three independent
-data groups each have a primary and standby, giving **six PostgreSQL/Patroni
-instances**, two per node:
-
-| Group | Initial primary | Initial standby |
-| --- | --- | --- |
-| A — coordinator + assigned data | `node-control` | `node-app` |
-| B — data | `node-app` | `node-store` |
-| C — data | `node-store` | `node-control` |
-
-Groups contain multiple shards. Each node holds two groups, not the full
-dataset; either worker-only node can fail while a copy of every group survives. Validate
-actual distribution and routing after promotion.
-
-Run Patroni alongside PostgreSQL in each instance's container, using
-Kubernetes as its distributed configuration store and its Citus integration.
-No separate etcd or PostgreSQL monitor is selected. Coordination depends on
-the control plane. Scope Patroni's API permissions and customize its
-role label, e.g. `postgres-role`, to retain `role=store` for Tester Agent.
+Three workers plus the coordinator store the shards. With RF2 every shard has
+two active placements, normally on different nodes. This is **asynchronous
+Citus replication**, not a synchronous Patroni quorum.
 
 | State | Write acknowledgement |
 | --- | --- |
-| Healthy | Durable commit on primary and standby on different nodes. |
-| Worker node unavailable | Continue after safe failover; retain replicated commits where possible and explicitly report single-copy/reduced redundancy. |
-| Worker node recovering | Continue service, rebuild/catch up replicas and restore replicated acknowledgements. |
+| Healthy | Commit routed by Citus with two active placements per shard. |
+| Worker unavailable | After explicit `citus_disable_node`, writes may continue in `single_copy`; the adapter reports reduced durability. |
+| Worker recovering | Reactivate the node, restore `replicated` policy, then rebalance and verify 48 placements. |
 
-Configure synchronous replication, promotion eligibility, degraded transitions
-and detection timeouts. Streaming replication is asynchronous by default;
-strict synchronous mode can block writes without a standby. Single-copy
-commits cannot survive loss of the remaining copy before repair.
+The administrator controls the `canonical.recovery` row. Writers hold a shared
+row lock through commit, so a durability transition cannot race a mutation.
+Single-copy commits cannot survive loss of the remaining copy before repair.
 
-The storage overlay defaults to strict synchronous mode and `remote_apply`.
-An administrator can enter a persisted `single_copy` recovery policy after
-fencing a worker and safe Patroni promotion. Writers hold a shared policy-row
-lock through commit; downgrade waits for them before relaxing affected groups'
-strict setting. Repair verifies named cross-node copies and WAL replay, restores
-strict mode first, then restores `replicated` acknowledgements. Interrupted
-transitions stay conservative. These operations require live failure validation;
-see [deployment details](../deploy/README.md#canonical-postgresql-storage).
+The coordinator is a single logical entry point and therefore not HA. Losing
+the control node requires restoring the coordinator PVC; this is a deliberate
+lean-deployment trade-off. Worker loss is handled by Citus placement failover.
 
-Replacement membership reuses the same logical node and two empty slots;
-Patroni clones surviving groups without changing the six-instance topology.
-Capacity membership can drain/re-enable an existing worker group and use Citus
-background logical rebalancing. Replica repair rebuilds a whole PostgreSQL group
-copy; shard movement redistributes data among groups. Additional groups require
-an explicit architecture/resource review.
+## Operations
 
-Fence isolated/resumed database primaries and separately reject stale poller
-ownership. Validate clock skew, freeze/resume, partitions and disk loss.
-An empty replacement must automatically restore copies and routing;
-replica repair differs from adding capacity and redistributing shards.
-Pod rescheduling or Patroni installation alone does not establish recovery.
-Prove restored redundancy with a subsequent worker-loss test.
+```bash
+kubectl apply -k deploy
+kubectl -n sistem-informasi-kebencanaan-bnpb wait \
+  --for=condition=complete job/citus-init --timeout=300s
+```
 
-References: [Patroni/Citus](https://patroni.readthedocs.io/en/latest/citus.html),
-[Kubernetes coordination](https://patroni.readthedocs.io/en/latest/kubernetes.html),
-[replication modes](https://patroni.readthedocs.io/en/latest/replication_modes.html).
+Service DNS is fixed: `citus-coordinator`, `citus-worker-1`,
+`citus-worker-2`, `citus-worker-3`, `canonical-api` and `canonical-store`.
+`citus-worker-3` starts at zero replicas and is scaled for node-addition drills.
+P1 analytics are served by `canonical-api:8080/analytics`; the page uses the
+Audit cursor path and carries a `partial` marker. Grafana remains metrics,
+traces and logs only, with no canonical database credential.
 
-## API and consistency
-
-| Operation | Required behavior |
-| --- | --- |
-| Canonical write | Atomically validate version/authority, mutate the event and write its outbox change; acknowledge under the replication policy. |
-| Updates/retractions | Propagate changes as well as initial inserts. |
-| Retry | Prevent duplicate events/effects; reject stale versions and conflicting reuse of a version. |
-| Poller ownership | B supplies authority; A enforces it at the durable write boundary, including after freeze/resume. |
-| Field report | C durably owns input before returning 202; acceptance is distinct from canonical visibility. |
-| Audit list | Ascending `(ingested_at, hazard_id)`, cursor pagination, one logical copy per event. |
-| Checksum | Per-source byte-sorted `source_ref_id` values joined by newline, no trailing newline; lowercase SHA-256. |
-| Analytics | Count each active event once across shards; cover all five required hazard categories. |
-| Missing data | Bounded responses, endpoint-specific partial markers and visibly incomplete totals. |
-
-Define snapshot/cursor behavior during updates, promotion and repair,
-failover response bounds and how reduced redundancy is reported.
-The Aggregator must implement partial-result handling; distributed SQL
-alone does not provide the required API contract. Validate write continuity
-and critical notification latency during recovery.
-
+References: [distributed tables](https://docs.citusdata.com/en/stable/develop/reference_ddl.html),
+[node properties](https://docs.citusdata.com/en/stable/develop/api_udf.html#citus-set-node-property),
+[cluster management](https://docs.citusdata.com/en/stable/admin_guide/cluster_management.html).

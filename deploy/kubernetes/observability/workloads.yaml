@@ -21,7 +21,7 @@ spec:
       serviceAccountName: prometheus
       automountServiceAccountToken: false
       nodeSelector:
-        app-eligible: 'true'
+        bnpb.io/app-eligible: "true"
       affinity:
         nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -122,7 +122,7 @@ spec:
       serviceAccountName: grafana
       automountServiceAccountToken: false
       nodeSelector:
-        app-eligible: 'true'
+        bnpb.io/app-eligible: "true"
       affinity:
         nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -253,7 +253,7 @@ spec:
       serviceAccountName: tempo
       automountServiceAccountToken: false
       nodeSelector:
-        app-eligible: 'true'
+        bnpb.io/app-eligible: "true"
       affinity:
         nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -352,7 +352,7 @@ spec:
       serviceAccountName: loki
       automountServiceAccountToken: false
       nodeSelector:
-        app-eligible: 'true'
+        bnpb.io/app-eligible: "true"
       affinity:
         nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -449,7 +449,7 @@ spec:
       serviceAccountName: alloy
       automountServiceAccountToken: false
       nodeSelector:
-        app-eligible: 'true'
+        bnpb.io/app-eligible: "true"
       affinity:
         nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -563,7 +563,7 @@ spec:
       serviceAccountName: otel-collector
       automountServiceAccountToken: false
       nodeSelector:
-        app-eligible: 'true'
+        bnpb.io/app-eligible: "true"
       affinity:
         nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:

@@ -17,15 +17,15 @@ labels on each workload's **pod template**, not only the Deployment metadata:
 | `app.kubernetes.io/part-of` | `bnpb` |
 | `app.kubernetes.io/component` | `aggregator`, `database`, `broker`, `processor`, `api`, `mock`, `sensor`, or `telemetry` |
 | `role` | Exactly one official value: `aggregator`, `store`, `broker`, `consumer`, `api`, `mock`, `sensor`, `other` |
-| `postgres-role` | Patroni-managed `primary`/`replica`; do not let Patroni overwrite `role=store` |
+| `bnpb.io/role` | Node role contract: `control`, `app` or `store`; use `role=store` on Citus pods |
 
-Service selectors use name plus part-of, with group labels on database endpoints.
-Never select by version, pod name or correlation ID. For storage groups A/B/C use
-`bnpb.io/store-group: a|b|c`; separate primary and standby across nodes as in the
-architecture. Node eligibility labels remain `app-eligible`, `store-eligible`,
-`aggregator-eligible`, each value `true`. Avoid hard anti-affinity that blocks the
-3→5 Aggregator scaling test. Add downward API env `POD_NAME=metadata.name` and
-`NODE_NAME=spec.nodeName`; set `OTEL_SERVICE_NAME` to the stable component name.
+Service selectors use name plus part-of. Never select by version, pod name or
+correlation ID. Node eligibility uses `bnpb.io/role` plus
+`bnpb.io/app-eligible=true` on app/store; the compatibility labels
+`app-eligible`, `store-eligible` and `aggregator-eligible` may remain for older
+workloads. Avoid hard anti-affinity that blocks the 3→5 Aggregator scaling test.
+Add downward API env `POD_NAME=metadata.name` and `NODE_NAME=spec.nodeName`; set
+`OTEL_SERVICE_NAME` to the stable component name.
 
 Tester Agent stays in its supplied namespace, unchanged. Do not apply policy,
 RBAC, taints or resource constraints that obstruct its required access.
@@ -48,7 +48,9 @@ This table reserves endpoints; it does not assert the Services already exist.
 | `satellite-processor` | broker | TCP 8080 health; consumes external feed |
 | `field-report-consumer` | consumer | TCP 8080 health |
 | `sensor-pantai` | sensor | Use the supplied sensor's listener/configuration; do not invent its API |
-| `canonical-a-primary`, `canonical-b-primary`, `canonical-c-primary` | store | TCP 5432 PostgreSQL group primary endpoints; 8008 Patroni management, restricted |
+| `citus-coordinator` | store | TCP 5432 Citus coordinator SQL endpoint |
+| `citus-worker-1`, `citus-worker-2`, `citus-worker-3` | store | TCP 5432 Citus worker PostgreSQL endpoints |
+| `canonical-api` (`canonical-store` alias) | other | TCP 8080 canonical adapter/audit/analytics API |
 | `otel-collector` | other | TCP 4318 OTLP/HTTP protobuf ingestion |
 | `prometheus`, `grafana`, `tempo`, `loki` | other | TCP 9090, 3000, 3200, 3100 respectively |
 
@@ -59,7 +61,7 @@ Exporter-backed components keep their native metrics ports when necessary;
 deployment discovery must explicitly configure those targets. Management ports
 are cluster-internal; the public client entry point does not proxy `/metrics`.
 Telemetry system receivers/exporters may need additional internal ports when
-their manifests are implemented. Do not expose PostgreSQL, Patroni or Kafka
+their manifests are implemented. Do not expose PostgreSQL/Citus or Kafka
 directly to browsers/CLI users.
 
 ## Configuration and credential names
@@ -78,8 +80,9 @@ Secrets contain no committed real values. Reserve these names and keys:
 | Secret | Keys | Who receives it |
 | --- | --- | --- |
 | `bnpb-audit-auth` | `token` | Aggregator Audit middleware only |
-| `bnpb-canonical-db` | `username`, `password`, `database` | Aggregator and canonical database provisioning only |
-| `bnpb-replication-auth` | `username`, `password` | PostgreSQL/Patroni instances only |
+| `bnpb-canonical-cluster` | `PATRONI_SUPERUSER_PASSWORD`, `CANONICAL_APP_PASSWORD` | Citus StatefulSets and `citus-init` |
+| `bnpb-citus-admin` | `CANONICAL_ADMIN_DSN` | `citus-init` schema Job only |
+| `bnpb-citus-api` | `CANONICAL_DSN` | `canonical-api` adapter |
 | `bnpb-bmkg-auth` | `api-key` | BMKG mock and authorized Aggregator poller |
 | `bnpb-pvmbg-auth` | `token` | PVMBG mock and authorized Aggregator poller |
 | `bnpb-jwt-auth` | `signing-key` | Auth and Client-Facing API |

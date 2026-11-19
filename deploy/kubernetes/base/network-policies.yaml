@@ -202,7 +202,6 @@ spec:
   - from:
     - podSelector:
         matchLabels:
-          app.kubernetes.io/name: bnpb
           app.kubernetes.io/part-of: bnpb
     ports:
     - protocol: TCP

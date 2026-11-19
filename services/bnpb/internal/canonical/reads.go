@@ -3,49 +3,67 @@ package canonical
 import (
 	"context"
 	"encoding/json"
-	"sort"
+	"fmt"
 	"time"
 
 	"github.com/rizalkhairan/distributed-system/bnpb/internal/database"
 )
 
 // List preserves M1's array shape, event-time filter and newest-first order.
-// Since arrays cannot express coverage, an incomplete traversal fails closed.
+// The legacy endpoint deliberately uses one Citus query so Aggregator reads do
+// not fan out into per-shard round trips. /v1/events still uses the cursor
+// traversal that verifies complete shard coverage.
 func (s *Store) List(ctx context.Context, source, severity, since string, limit int) ([]Event, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 1000
 	}
-	var start time.Time
-	var err error
+	sinceParam := ""
 	if since != "" {
-		start, err = time.Parse(time.RFC3339Nano, since)
+		start, err := time.Parse(time.RFC3339Nano, since)
 		if err != nil {
 			return nil, err
 		}
+		sinceParam = start.UTC().Format(time.RFC3339Nano)
 	}
-	events, missing, err := gather(ctx, s, Query{Source: source})
+	ctx, cancel := context.WithTimeout(ctx, readTimeout)
+	defer cancel()
+	query := `SELECT event FROM canonical.events WHERE operation='upsert'`
+	args := make([]any, 0, 4)
+	if source != "" {
+		args = append(args, source)
+		query += fmt.Sprintf(" AND source=$%d", len(args))
+	}
+	if sinceParam != "" {
+		args = append(args, sinceParam)
+		query += fmt.Sprintf(" AND event->>'occurred_at' >= $%d", len(args))
+	}
+	if severity != "" {
+		args = append(args, severity)
+		query += fmt.Sprintf(" AND event->>'severity'=$%d", len(args))
+	}
+	args = append(args, limit)
+	query += fmt.Sprintf(" ORDER BY event->>'occurred_at' DESC, hazard_id LIMIT $%d", len(args))
+	rows, err := s.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
-	if len(missing) > 0 {
-		return nil, storageError("coverage_unavailable", "legacy list cannot represent incomplete coverage")
-	}
-	selected := []Event{}
-	for _, e := range events {
-		if (severity == "" || e.Severity == severity) && !e.OccurredAt.Before(start) {
-			selected = append(selected, e)
+	defer rows.Close()
+	events := []Event{}
+	for rows.Next() {
+		var raw []byte
+		var event Event
+		if err = rows.Scan(&raw); err != nil {
+			return nil, err
 		}
-	}
-	sort.Slice(selected, func(i, j int) bool {
-		if selected[i].OccurredAt.Equal(selected[j].OccurredAt) {
-			return selected[i].HazardID < selected[j].HazardID
+		if err = json.Unmarshal(raw, &event); err != nil {
+			return nil, err
 		}
-		return selected[i].OccurredAt.After(selected[j].OccurredAt)
-	})
-	if len(selected) > limit {
-		selected = selected[:limit]
+		events = append(events, event)
 	}
-	return selected, nil
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return events, nil
 }
 func (s *Store) Get(ctx context.Context, id string) (Event, error) {
 	ctx, cancel := context.WithTimeout(ctx, readTimeout)

@@ -120,7 +120,7 @@ func loadConfig() (config, error) {
 	if err != nil || cfg.StalenessThreshold <= 0 {
 		return cfg, fmt.Errorf("STALENESS_THRESHOLD must be a positive duration, such as 10s")
 	}
-	cfg.ReadCacheTTL, err = time.ParseDuration(env("READ_CACHE_TTL", "2s"))
+	cfg.ReadCacheTTL, err = time.ParseDuration(env("READ_CACHE_TTL", "5s"))
 	if err != nil || cfg.ReadCacheTTL < 0 {
 		return cfg, fmt.Errorf("READ_CACHE_TTL must be a non-negative duration, such as 2s")
 	}

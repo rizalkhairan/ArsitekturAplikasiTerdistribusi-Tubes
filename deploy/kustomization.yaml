@@ -6,7 +6,6 @@ resources:
   - 10-config.yaml
   - 11-secrets.dev.yaml
   - 20-coordinator.yaml
-  - 21-canonical-store.yaml
   - 22-ingest-pipeline.yaml
   - 23-field-notifier.yaml
   - 30-aggregator.yaml
@@ -18,6 +17,9 @@ resources:
   - 52-event-consumers.yaml
   - 53-satellite.yaml
   - sensor-pantai/base
+  - kubernetes/base/citus.yaml
+  - kubernetes/base/canonical-api.yaml
+  - kubernetes/base/citus-init.yaml
   - kubernetes/observability
 labels:
   - pairs:

@@ -128,7 +128,7 @@ func main() {
 	readAPI.SetMetrics(registryMetrics.Handler())
 	readAPI.ConfigureObservability(httpMetrics)
 	if m2 {
-		readAPI.ConfigureM2(store, dlq, cfg.AuditToken, freshnessFunc(coord, store, cfg), func(ctx context.Context) any {
+		readAPI.ConfigureM2(store, dlq, cfg.AuditToken, freshnessFunc(ctx, coord, store, cfg), func(ctx context.Context) any {
 			return sensorStatus(ctx, store, sensorBreaker, sensorCache, sensorProgress, cfg)
 		})
 	}
@@ -377,28 +377,85 @@ func parkPVMBGFailure(ctx context.Context, baseURL, token string, failure proces
 	return nil
 }
 
-func freshnessFunc(coord *coordclient.Client, store *storeclient.Client, cfg config) api.FreshnessFunc {
-	type entry struct {
-		last  time.Time
-		stale bool
-		msg   string
-		at    time.Time
+type freshnessEntry struct {
+	last  time.Time
+	stale bool
+	msg   string
+	at    time.Time
+}
+
+type freshnessCache struct {
+	mu       sync.Mutex
+	entries  map[string]freshnessEntry
+	inflight map[string]bool
+	coord    *coordclient.Client
+	store    *storeclient.Client
+	cfg      config
+}
+
+// freshnessFunc keeps coordinator/storage latency out of the request path.
+// Every source is refreshed in the background; handlers only read the last
+// snapshot (stale data is preferable to blocking every /hazards request).
+func freshnessFunc(ctx context.Context, coord *coordclient.Client, store *storeclient.Client, cfg config) api.FreshnessFunc {
+	f := &freshnessCache{
+		entries: map[string]freshnessEntry{}, inflight: map[string]bool{},
+		coord: coord, store: store, cfg: cfg,
 	}
-	var mu sync.Mutex
-	cache := map[string]entry{}
-	return func(ctx context.Context, source string) (time.Time, bool, string) {
-		mu.Lock()
-		if cached, ok := cache[source]; ok && time.Since(cached.at) < 2*time.Second {
-			mu.Unlock()
-			return cached.last, cached.stale, cached.msg
+	go f.loop(ctx)
+	return f.lookup
+}
+
+func (f *freshnessCache) lookup(_ context.Context, source string) (time.Time, bool, string) {
+	f.mu.Lock()
+	entry, ok := f.entries[source]
+	if !ok || time.Since(entry.at) >= 2*time.Second {
+		if !f.inflight[source] {
+			f.inflight[source] = true
+			go f.refresh(source)
 		}
-		mu.Unlock()
-		last, stale, msg := lookupFreshness(ctx, coord, store, cfg, source)
-		mu.Lock()
-		cache[source] = entry{last: last, stale: stale, msg: msg, at: time.Now()}
-		mu.Unlock()
-		return last, stale, msg
 	}
+	f.mu.Unlock()
+	if !ok {
+		return time.Time{}, true, "freshness warming"
+	}
+	return entry.last, entry.stale, entry.msg
+}
+
+func (f *freshnessCache) loop(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	sources := []string{"BMKG", "PVMBG", sensor.Source}
+	for {
+		for _, source := range sources {
+			f.mu.Lock()
+			if f.inflight[source] {
+				f.mu.Unlock()
+				continue
+			}
+			f.inflight[source] = true
+			f.mu.Unlock()
+			go f.refresh(source)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (f *freshnessCache) refresh(source string) {
+	defer func() {
+		f.mu.Lock()
+		delete(f.inflight, source)
+		f.mu.Unlock()
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	last, stale, msg := lookupFreshness(ctx, f.coord, f.store, f.cfg, source)
+	f.mu.Lock()
+	f.entries[source] = freshnessEntry{last: last, stale: stale, msg: msg, at: time.Now()}
+	f.mu.Unlock()
 }
 
 func lookupFreshness(ctx context.Context, coord *coordclient.Client, store *storeclient.Client, cfg config, source string) (time.Time, bool, string) {

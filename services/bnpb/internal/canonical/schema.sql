@@ -1,12 +1,12 @@
 -- Run once as the database owner on the Citus coordinator, after all groups join.
--- 48 shards is an implementation default, not an assignment requirement.
+-- 12 shards is the portable default; RF2 still gives two active copies.
 CREATE SCHEMA IF NOT EXISTS canonical;
 -- statement
 SET search_path = canonical, public;
 -- statement
 -- Recovery changes this row under an exclusive lock. Every writer holds a
 -- shared row lock until COMMIT, so the acknowledgement policy cannot race a
--- change to Patroni's strict synchronous setting. Only administrators update it.
+-- change to the active durability policy. Only administrators update it.
 CREATE TABLE IF NOT EXISTS recovery (
     singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
     durability text NOT NULL CHECK (durability IN ('replicated', 'single_copy')),
@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS recovery (
 INSERT INTO recovery(singleton, durability) VALUES (true, 'replicated')
 ON CONFLICT DO NOTHING;
 -- statement
-SET citus.shard_count = 48;
+SET citus.shard_count = 12;
 -- statement
 SET citus.shard_replication_factor = 2;
 -- statement
@@ -64,6 +64,15 @@ CREATE INDEX IF NOT EXISTS events_hazard_id ON events (hazard_id);
 -- statement
 CREATE INDEX IF NOT EXISTS events_ingestion ON events (ingested_at, hazard_id);
 -- statement
+CREATE INDEX IF NOT EXISTS events_source_occurred ON events
+    (source, (event->>'occurred_at') DESC, hazard_id) WHERE operation='upsert';
+-- statement
+CREATE INDEX IF NOT EXISTS events_occurred ON events
+    ((event->>'occurred_at') DESC, hazard_id) WHERE operation='upsert';
+-- statement
+CREATE INDEX IF NOT EXISTS events_severity ON events
+    ((event->>'severity')) WHERE operation='upsert';
+-- statement
 CREATE TABLE IF NOT EXISTS outbox (
     event_key text NOT NULL,
     version bigint NOT NULL,
@@ -84,7 +93,7 @@ CREATE INDEX IF NOT EXISTS outbox_pending ON outbox (created_at) WHERE published
 -- statement
 
 -- Fixed, non-parameterized health probe; the application cannot run arbitrary
--- administrator commands. Strict Patroni sync mode must also stay enabled.
+-- administrator commands. Citus placement health gates the result.
 CREATE OR REPLACE FUNCTION canonical.replication_ready() RETURNS boolean
 LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
   -- Lean Citus mode: durability is provided by Citus shard replication, not
@@ -129,10 +138,14 @@ GRANT EXECUTE ON FUNCTION canonical.replication_ready() TO canonical_app;
 -- statement
 GRANT EXECUTE ON FUNCTION canonical.primaries_ready() TO canonical_app;
 -- statement
+-- Read-only Citus metadata is needed for the Audit API location and cursor
+-- coverage checks. The application cannot modify routing or placement.
+GRANT SELECT ON pg_dist_node, pg_dist_placement, pg_dist_shard TO canonical_app;
+-- statement
 
 -- Immutable query cache is local to the replicated coordinator, shared by all
--- Aggregators. It is disposable: promotion may lose an asynchronously saved
--- snapshot, in which case its cursor is explicitly rejected.
+-- Aggregators. It is disposable: a coordinator replacement may lose an
+-- asynchronously saved snapshot, in which case its cursor is explicitly rejected.
 CREATE TABLE IF NOT EXISTS canonical.read_snapshots (
     id uuid PRIMARY KEY,
     secret bytea NOT NULL,
@@ -150,8 +163,8 @@ GRANT SELECT, INSERT, DELETE ON canonical.read_snapshots TO canonical_app;
 -- cutover while one shard is being observed; ordinary event writes continue.
 CREATE OR REPLACE FUNCTION canonical.read_shard(wanted bigint, source_filter text, since_filter text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = pg_catalog, pg_temp SET lock_timeout = '500ms'
-SET statement_timeout = '1500ms' SET citus.node_connection_timeout = '1000ms'
+SET search_path = pg_catalog, pg_temp SET lock_timeout = '1000ms'
+SET statement_timeout = '5000ms' SET citus.node_connection_timeout = '3000ms'
 AS $$
 DECLARE
     placement record;

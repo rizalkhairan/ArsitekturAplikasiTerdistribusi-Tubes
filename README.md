@@ -5,13 +5,51 @@ BMKG dan PVMBG adalah mock service pasif; BNPB melakukan polling, memetakan data
 format kanonik `HazardEvent`, menyimpannya, dan mempublikasikannya ke message broker
 untuk dikonsumsi beberapa consumer independen.
 
-Cakupan: dua instansi sumber (BMKG, PVMBG), dua jenis bencana (seismik, vulkanik),
-BNPB sebagai node koordinasi.
+Cakupan M1: dua instansi sumber (BMKG, PVMBG), dua jenis bencana (seismik,
+vulkanik), BNPB sebagai node koordinasi. M2 menambahkan sumber **SATELIT**
+(hotspot WILDFIRE) dan **SENSOR_PANTAI** (COASTAL), serta penyimpanan Citus
+terdistribusi.
 
 Pengembangan M2 mengacu pada [arsitektur](services/ARCHITECTURE.md),
 [kontrak API kanonik](contracts/m2/README.md), serta
 [konvensi platform dan telemetri](contracts/m2/PLATFORM.md).
 [Helper Go bersama](services/shared/README.md) menyediakan contoh instrumentasi dua service.
+
+## 0. Deployment M2 (Kubernetes)
+
+Demo M2 berjalan di tiga node K3s dengan kernel terpisah. Docker Compose M1
+tetap tersedia untuk pengembangan lokal, tetapi bukan topologi demo.
+
+| Node | Jenis | Peran | vCPU | RAM |
+| --- | --- | --- | --- | --- |
+| `node-control` | VM VirtualBox | control plane + worker + Citus coordinator | 4 | 8 GiB |
+| `node-app` | VM VirtualBox | worker + Citus worker + aplikasi | 4 | 8 GiB |
+| `node-store` | VM VirtualBox | worker + Citus worker + observability | 4 | 8 GiB |
+
+Host fisik demo: mesin Windows dengan **8 vCPU** dan **32 GiB RAM**; node
+berjalan sebagai tiga VM VirtualBox dengan kernel Linux terpisah. Ganti nama
+node pada perintah di bawah sesuai `kubectl get nodes`.
+
+Setelah image di-import ke ketiga node (lihat bagian image), deployment utama
+adalah satu perintah:
+
+```bash
+bash scripts/deploy.sh <node-control> <node-app> <node-store>
+```
+
+Perintah tersebut memasang label peran, membuat Secret Citus, menerapkan
+`kubectl apply -k deploy`, dan menunggu `citus-init` serta rollout adapter.
+Tidak ada taint khusus pada control node agar Tester Agent dapat berjalan di
+setiap node. Pasang Tester Agent tanpa mengubah image:
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/susTuna/if4031-tester-agent/ebb55261711123a9a211739ffbf140a275caa6da/manifest.yaml
+kubectl -n tester-agent get daemonset,pods
+```
+
+Konfigurasi utama ada di `deploy/10-config.yaml` (ConfigMap `bnpb-config`) dan
+Secret `bnpb-secrets`/`bnpb-citus-*`. Variabel penting: `STORAGE_URL`,
+`COORDINATOR_URL`, `READ_CACHE_TTL`, `UPSTREAM_TIMEOUT`, `UPSTREAM_RETRIES`.
 
 ---
 
@@ -31,7 +69,7 @@ Pengembangan M2 mengacu pada [arsitektur](services/ARCHITECTURE.md),
                          │ BNPB Aggregator          │─gRPC──▶│ BMKG mock  :8081   │
                          │  read API  :8085         │        └────────────────────┘
                          │  health    :8086         │        ┌────────────────────┐
-                         │  Canonical Store (SQLite)│─REST──▶│ PVMBG mock :8082   │
+                         │  canonical-api → Citus   │─REST──▶│ PVMBG mock :8082   │
                          │  Outbox                  │        └────────────────────┘
                          └─────────────┬────────────┘
                                        │ publish HazardEvent
@@ -705,9 +743,11 @@ docker pull docker.io/grafana/tempo:2.8.2
 docker pull docker.io/grafana/loki:3.5.3
 docker pull docker.io/grafana/alloy:v1.10.2
 docker pull docker.io/otel/opentelemetry-collector-contrib:0.131.0
+docker pull docker.io/citusdata/citus:13.0.1-pg16
 
 docker save -o /tmp/bnpb-images.tar \
   apache/kafka:3.9.0 \
+  docker.io/citusdata/citus:13.0.1-pg16 \
   docker.io/prom/prometheus:v3.5.0 \
   docker.io/grafana/grafana:12.1.0 \
   docker.io/grafana/tempo:2.8.2 \
@@ -717,7 +757,9 @@ docker save -o /tmp/bnpb-images.tar \
   $(docker images --format '{{.Repository}}:{{.Tag}}' \
     | grep '^bnpb-gateway/.*:m2$')
 
-for host in ubuntu@192.168.56.10 ubuntu@192.168.56.11 ubuntu@192.168.56.12; do
+# NODES is a space-separated list of SSH destinations for the three nodes.
+: "${NODES:?set NODES to 'user@control user@app user@store'}"
+for host in $NODES; do
   scp /tmp/bnpb-images.tar "$host:/tmp/bnpb-images.tar"
   ssh "$host" 'sudo k3s ctr images import /tmp/bnpb-images.tar && rm -f /tmp/bnpb-images.tar'
 done
@@ -728,13 +770,15 @@ Siapkan Secret asli di luar git:
 ```bash
 cp deploy/secrets.example.yaml deploy/secrets.yaml
 # isi INTERNAL_API_KEY, token PVMBG/BMKG, P4_FEED_TOKEN, dan password aplikasi
-kubectl label node node-app app-eligible=true --overwrite
-kubectl label node node-control node-store app-eligible- --overwrite
+
+# Ganti dengan nama node Anda; tidak ada nama node/IP di manifest.
+bash scripts/label-nodes.sh <control-node> <app-node> <store-node>
+bash scripts/citus-secrets.sh
 kubectl apply -k deploy
 kubectl -n sistem-informasi-kebencanaan-bnpb apply -f deploy/secrets.yaml
 kubectl -n sistem-informasi-kebencanaan-bnpb rollout restart \
   deployment/aggregator deployment/client-api deployment/auth \
-  deployment/satellite-processor deployment/field-notifier
+  deployment/satellite-processor deployment/field-notifier deployment/grafana
 ```
 
 Jangan menjalankan `kubectl apply -k deploy` lagi setelah Secret asli dipasang,
@@ -784,13 +828,10 @@ bash scripts/port-forward-loop.sh field-notifier 18097 8080 >/tmp/pf-notifier.lo
 
 Stack observability sudah menjadi bagian dari `deploy/kustomization.yaml`, jadi
 `kubectl apply -k deploy` juga memasang Prometheus, Grafana, Tempo, Loki, Alloy,
-dan OTel Collector. Pod observability dijadwalkan ke node berlabel
-`app-eligible=true`; pada cluster demo, pakai node aplikasi:
+dan OTel Collector. Pod observability memakai `bnpb.io/app-eligible=true` dari
+`scripts/label-nodes.sh`:
 
 ```bash
-kubectl label node node-app app-eligible=true --overwrite
-kubectl label node node-control node-store app-eligible- --overwrite
-
 kubectl -n sistem-informasi-kebencanaan-bnpb create secret generic bnpb-grafana-auth \
   --from-literal=admin-password='admin' --dry-run=client -o yaml | kubectl apply -f -
 
@@ -819,154 +860,140 @@ curl -s 'http://127.0.0.1:19090/api/v1/targets?state=active' \
 
 ### Milestone 2 - Problem 1: Distributed canonical storage (Citus)
 
-P1 memakai Citus murni tanpa Patroni. Coordinator dan tiga worker adalah
-PostgreSQL primary biasa; ketahanan node hilang berasal dari **Citus shard
-replication factor 2**, bukan streaming standby.
+P1 memakai Citus murni tanpa Patroni. Tiga node penyimpanan adalah PostgreSQL
+primary biasa; durability berasal dari **Citus shard replication factor 2**.
+Manifest tidak menyebut nama node atau IP pod. Kontraknya adalah label peran:
+
+```bash
+bash scripts/label-nodes.sh <control-node> <app-node> <store-node>
+```
+
+Script tersebut memasang:
 
 ```text
-citus-coordinator  node-control  group 0
-citus-worker-1     node-app      group 1
-citus-worker-2     node-store    group 2
-citus-worker-3     node-app      group 3 (ditambahkan saat uji node addition)
+bnpb.io/role=control|app|store
+bnpb.io/app-eligible=true pada app/store
 ```
 
-48 shard logis, 2 salinan per shard. `canonical-api` menjadi adapter protokol
-legacy `canonical-store` di atas PostgreSQL/Citus.
+Susunan storage:
 
-#### Setup storage
+```text
+citus-coordinator  group 0  node role=control
+citus-worker-1     group 1  node role=app
+citus-worker-2     group 2  node role=store
+citus-worker-3     group 3  node role=app (replicas 0; dinyalakan untuk uji node addition)
+```
+
+Semua koneksi memakai Service DNS:
+
+```text
+citus-coordinator:5432
+citus-worker-1:5432
+citus-worker-2:5432
+citus-worker-3:5432
+canonical-api:8080
+coordinator:8080
+```
+
+Tidak ada IP pod di ConfigMap, Secret, atau metadata Citus.
+
+#### Setup portable
 
 ```bash
-kubectl label node node-control node-app node-store \
-  store-eligible=true app-eligible=true --overwrite
+export KUBECONFIG=/path/ke/kubeconfig-cluster
+TAG=m2 bash scripts/build-images.sh
+# impor image ke semua node k3s, atau push ke registry lalu ubah image di overlay
 
-# Direktori data lokal (PV/hostPath, bukan storage jaringan).
-for spec in \
-  '192.168.56.10 canonical-a-primary' \
-  '192.168.56.11 canonical-b-primary' \
-  '192.168.56.11 canonical-a-replica' \
-  '192.168.56.12 canonical-c-primary'; do
-  set -- $spec
-  ssh ubuntu@"$1" "sudo install -d -m 0700 -o 1000 -g 1000 /var/lib/bnpb/$2"
-done
+bash scripts/label-nodes.sh node-control node-app node-store
+bash scripts/citus-secrets.sh
 
-# canonical-*-data PVC harus sudah Bound (dibuat oleh storage.yaml).
-kubectl -n sistem-informasi-kebencanaan-bnpb get pvc | grep canonical-
+# baseline aplikasi + Citus + adapter + bootstrap (satu command)
+kubectl apply -k deploy
 
-kubectl apply --validate=false -f deploy/kubernetes/base/citus-services.yaml
-kubectl apply --validate=false -f deploy/kubernetes/base/citus-pods.yaml
-kubectl apply --validate=false -f deploy/kubernetes/base/citus-worker-3.yaml
-kubectl -n sistem-informasi-kebencanaan-bnpb get pods -l citus=true -o wide
+kubectl -n sistem-informasi-kebencanaan-bnpb wait \
+  --for=condition=complete job/citus-init --timeout=300s
+kubectl -n sistem-informasi-kebencanaan-bnpb rollout status \
+  deployment/canonical-api deployment/aggregator --timeout=180s
 ```
 
-Inisialisasi extension/role dan daftarkan node. Ganti IP dengan IP pod dari
-perintah di atas:
+Image `bnpb-gateway/aggregator:m2` dipakai untuk `canonical-api` dan
+`canonical-admin`; Dockerfile `services/bnpb/Dockerfile` membangun keduanya.
+Job `citus-init` membuat database/role/extension, mendaftarkan worker dengan
+nama Service, lalu menjalankan migrasi schema embedded.
 
-```bash
-COORD=10.42.0.197
-WORKER1=10.42.2.14
-WORKER2=10.42.1.19
-WORKER3=10.42.2.17
-
-for pod in citus-coordinator citus-worker-1 citus-worker-2 citus-worker-3; do
-  kubectl -n sistem-informasi-kebencanaan-bnpb exec "$pod" -- \
-    psql -h 127.0.0.1 -U postgres -d canonical -v ON_ERROR_STOP=1 \
-    -c 'CREATE EXTENSION IF NOT EXISTS citus;'
-done
-
-kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator -- \
-  psql -h 127.0.0.1 -U postgres -d canonical -v ON_ERROR_STOP=1 <<SQL
-SELECT citus_set_coordinator_host('$COORD',5432);
-SELECT citus_add_node('$WORKER1',5432);
-SELECT citus_add_node('$WORKER2',5432);
-SELECT citus_add_node('$WORKER3',5432);
-SELECT citus_set_node_property('$COORD',5432,'shouldhaveshards',true);
-SQL
-
-# Role aplikasi (password dari Secret canonical).
-kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator -- \
-  psql -h 127.0.0.1 -U postgres -d canonical -v ON_ERROR_STOP=1 < \
-  services/bnpb/internal/canonical/schema.sql
-```
-
-Schema memakai `citus.shard_replication_factor=2`. Health function
-`canonical.replication_ready()` mensyaratkan tiga node aktif dan dua salinan
-per shard; `canonical.primaries_ready()` dipakai saat policy
-`recovery.durability='single_copy'` setelah satu node hilang.
-
-#### Adapter dan Aggregator
-
-```bash
-# Build static adapter (Go 1.26 auto-toolchain).
-cd services/bnpb
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GOTOOLCHAIN=auto \
-  go build -trimpath -o /tmp/canonical-api ./cmd/canonical-api
-cd ../..
-ssh ubuntu@192.168.56.10 \
-  'sudo install -d -m 0755 -o 1000 -g 1000 /var/lib/bnpb/canonical-api'
-scp /tmp/canonical-api ubuntu@192.168.56.10:/tmp/canonical-api
-ssh ubuntu@192.168.56.10 \
-  'sudo mv /tmp/canonical-api /var/lib/bnpb/canonical-api/canonical-api &&
-   sudo chmod 0755 /var/lib/bnpb/canonical-api/canonical-api'
-
-kubectl apply --validate=false -f deploy/kubernetes/base/canonical-api.yaml
-kubectl -n sistem-informasi-kebencanaan-bnpb patch cm bnpb-config \
-  --type merge -p '{"data":{"STORAGE_URL":"http://canonical-api:8080"}}'
-kubectl -n sistem-informasi-kebencanaan-bnpb scale deploy aggregator --replicas=3
-```
-
-Jika controller Kubernetes sedang sehat, gunakan Deployment/Service normal.
-Pod Citus dan adapter dibuat sebagai Pod langsung dengan `nodeName` agar
-storage tetap bisa dipulihkan saat controller-manager sedang recovering.
+`READ_CACHE_TTL` default 5 detik; cache memakai singleflight dan stale-on-error,
+sedangkan freshness sumber diperbarui di background, bukan di request path.
 
 #### Uji P1
 
 ```bash
-# 1. Sharding dan replikasi.
-kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator -- \
+kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator-0 -- \
   psql -h 127.0.0.1 -U postgres -d canonical -At <<'SQL'
 SELECT count(*) FROM pg_dist_shard WHERE logicalrelid='canonical.events'::regclass;
 SELECT count(*) FROM pg_dist_placement p JOIN pg_dist_node n USING(groupid)
  WHERE n.isactive AND p.shardstate=1;
 SELECT canonical.replication_ready(), canonical.primaries_ready();
 SQL
-
-# 2. Pagination lintas shard (adapter).
-kubectl -n sistem-informasi-kebencanaan-bnpb port-forward pod/canonical-api 18080:8080
-curl -s 'http://127.0.0.1:18080/v1/events?limit=5' | jq '{items:(.items|length),next_cursor,partial}'
-curl -s 'http://127.0.0.1:18080/v1/events?limit=5&cursor=<next_cursor>' | jq '{items:(.items|length),partial}'
-
-# 3. Node loss: hilangkan satu worker, policy single_copy, tulis tetap jalan.
-kubectl -n sistem-informasi-kebencanaan-bnpb delete pod citus-worker-2 --force --grace-period=0
-kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator -- \
-  psql -h 127.0.0.1 -U postgres -d canonical -c \
-  "SELECT citus_disable_node('$WORKER2',5432,synchronous:=true);
-   UPDATE canonical.recovery SET durability='single_copy', fenced_node='$WORKER2'
-   WHERE singleton;"
-# PUT ke /internal/canonical/events/... harus 201 dengan durability single_copy.
-
-# 4. Node addition.
-# Buat citus-worker-3 (PVC canonical-a-replica-data), lalu:
-kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator -- \
-  psql -h 127.0.0.1 -U postgres -d canonical -c \
-  "SELECT citus_add_node('$WORKER3',5432);
-   SELECT citus_rebalance_start(NULL,false,'block_writes'::citus.shard_transfer_mode);"
 ```
 
-#### Hasil uji P1 (cluster demo)
+Harapan: **12 shard, 48 placement aktif, health `t|t`**.
+
+```bash
+kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/canonical-api 18080:8080
+curl -s 'http://127.0.0.1:18080/v1/events?limit=5' | jq '{items:(.items|length),next_cursor,partial}'
+curl -s 'http://127.0.0.1:18080/v1/events?limit=5&cursor=<next_cursor>' | jq '{items:(.items|length),partial}'
+curl -s 'http://127.0.0.1:18080/internal/audit/events?limit=5' | jq '{items:(.items|length),partial,unavailable_units}'
+curl -s 'http://127.0.0.1:18080/internal/audit/checksum?source=SATELIT' | jq '{count,checksum,partial}'
+# Dashboard P1 (bukan dashboard metrik):
+# http://127.0.0.1:18080/analytics
+```
+
+Dashboard memakai jalur audit yang sama dan menampilkan banner
+`Data belum lengkap` beserta `unavailable_units` saat worker tidak terjangkau.
+
+Node loss (worker dimatikan, satu salinan sementara). Untuk simulasi node
+hilang sesungguhnya, matikan/hentikan VM node-store sehingga local-path di
+node itu ikut hilang; jangan menghapus PVC node lain yang masih hidup.
+
+```bash
+kubectl -n sistem-informasi-kebencanaan-bnpb scale statefulset citus-worker-2 --replicas=0
+kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator-0 -- \
+  psql -h 127.0.0.1 -U postgres -d canonical -c \
+  "SELECT citus_disable_node('citus-worker-2',5432,synchronous:=true);
+   UPDATE canonical.recovery SET durability='single_copy', fenced_node='citus-worker-2'
+   WHERE singleton;"
+```
+
+Tulis/read harus tetap berhasil dengan `durability=single_copy`. Setelah worker
+hidup lagi (`kubectl scale statefulset citus-worker-2 --replicas=1`), jalankan
+`citus_activate_node('citus-worker-2',5432)`, set `durability='replicated'`,
+lalu rebalance/verifikasi 48 placement.
+
+Node addition:
+
+```bash
+kubectl -n sistem-informasi-kebencanaan-bnpb scale statefulset citus-worker-3 --replicas=1
+# tunggu Ready, lalu jalankan ulang job citus-init
+kubectl -n sistem-informasi-kebencanaan-bnpb delete job citus-init --ignore-not-found
+kubectl apply -f deploy/kubernetes/base/citus-init.yaml
+kubectl -n sistem-informasi-kebencanaan-bnpb wait --for=condition=complete job/citus-init --timeout=300s
+```
+
+#### Hasil P1 (yang sudah dibuktikan pada cluster demo)
 
 | Kriteria | Bukti |
 |---|---|
-| Multi-node storage | 1 coordinator + 3 worker Citus, semua `1/1 Ready` |
-| Sharding | 48 shard `canonical.events`; 192 placement aktif |
-| Distribusi | 22–25 shard per worker setelah rebalance |
-| Cross-shard pagination | `/v1/events?limit=5` → 5 item + cursor; halaman 2 → 5 item; `partial=false` |
-| Node loss | worker-2 dimatikan; GET 13 event `partial=false`; write `201 durability=single_copy`; worker kembali dan metadata diaktifkan |
-| Node addition | worker-3 ditambahkan; 4 node; 192 placement tetap RF2; `replication_ready=t` |
-| Analytics dashboard | Grafana datasource `Citus P1` + dashboard `/d/p1-citus/p1-citus-analytics` (event per source) |
-| Adapter | Aggregator 3/3 Ready dengan `STORAGE_URL=http://canonical-api:8080` |
+| Multi-node storage | 3 node aktif + worker tambahan untuk uji addition |
+| Sharding | 12 shard `canonical.events`, RF2 |
+| Replikasi | 48 placement aktif |
+| Cross-shard pagination | `/v1/events` cursor halaman 5+5, `partial=false` |
+| Node loss | read tetap jalan, write `201 durability=single_copy` |
+| Node addition | worker-3 ditambahkan dan placement tetap RF2 |
+| Analytics dashboard | `canonical-api:8080/analytics` dengan agregasi hazard/severity/area dan `partial` |
+| Adapter | Aggregator 3/3 Ready; `STORAGE_URL=http://canonical-api:8080` |
 
-Catatan: setelah uji node-loss, tabel `events/outbox` di-reset dan schema
-dijalankan ulang agar metadata RF2 kembali bersih; data uji bersifat disposable.
+`canonical-store` hanya Service alias kompatibilitas untuk script lama; tidak
+ada lagi Deployment JSON canonical-store.
 
 ### Milestone 2 - Problem 1 (legacy): Interoperabilitas & evolusi skema
 

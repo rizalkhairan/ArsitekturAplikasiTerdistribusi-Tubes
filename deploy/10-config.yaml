@@ -5,7 +5,7 @@ metadata:
 data:
   # Every dependency URL is here so components can be replaced by editing this map.
   COORDINATOR_URL: http://coordinator:8080
-  STORAGE_URL: http://canonical-store:8080
+  STORAGE_URL: http://canonical-api:8080
   DLQ_URL: http://ingest-pipeline:8094
   INGEST_PIPELINE_URL: http://ingest-pipeline:8094
   NOTIFIER_URL: http://field-notifier:8080
@@ -16,8 +16,8 @@ data:
   AUTH_SERVICE_URL: http://auth:8000
 
   POLL_INTERVAL: 3s
-  UPSTREAM_TIMEOUT: 5s
-  UPSTREAM_RETRIES: "8"
+  UPSTREAM_TIMEOUT: 4s
+  UPSTREAM_RETRIES: "1"
   STALENESS_THRESHOLD: 10s
   READ_CACHE_TTL: 10s
   LEASE_TTL: 15s

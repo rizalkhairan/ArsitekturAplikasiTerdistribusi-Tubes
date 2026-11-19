@@ -28,7 +28,8 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(70407002)`); err != nil {
 		return err
 	}
-	for _, statement := range strings.Split(Schema, "-- statement\n") {
+	schema := strings.ReplaceAll(Schema, "\r\n", "\n")
+	for _, statement := range strings.Split(schema, "-- statement\n") {
 		if strings.TrimSpace(statement) == "" {
 			continue
 		}

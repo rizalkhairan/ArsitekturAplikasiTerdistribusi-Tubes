@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -25,6 +26,12 @@ import (
 type listCacheEntry struct {
 	events  []database.HazardEvent
 	expires time.Time
+}
+
+type listFill struct {
+	done   chan struct{}
+	events []database.HazardEvent
+	err    error
 }
 
 type FreshnessFunc func(ctx context.Context, source string) (lastSuccess time.Time, stale bool, message string)
@@ -49,15 +56,17 @@ type Server struct {
 	outer          func(http.Handler) http.Handler
 	ready          func() bool
 	cacheMu        sync.Mutex
-	refreshMu      sync.Mutex
 	listCache      map[string]listCacheEntry
+	fills          map[string]*listFill
 	refreshing     map[string]bool
+	storeSlots     chan struct{}
 	cacheTTL       time.Duration
 }
 
 func NewServer(addr string, db, writeDB *sql.DB, topic, internalKey string, registry *health.Registry, stalenessThreshold time.Duration) *Server {
 	s := &Server{db: db, writeDB: writeDB, topic: topic, internalKey: internalKey, health: registry, stalenessThreshold: stalenessThreshold,
-		listCache: map[string]listCacheEntry{}, refreshing: map[string]bool{}, cacheTTL: 500 * time.Millisecond}
+		listCache: map[string]listCacheEntry{}, fills: map[string]*listFill{}, refreshing: map[string]bool{},
+		storeSlots: make(chan struct{}, 8), cacheTTL: 5 * time.Second}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /readyz", s.handleReady)
@@ -188,6 +197,7 @@ func (s *Server) listEvents(ctx context.Context, source, severity, since string,
 			s.cacheMu.Unlock()
 			return events, nil
 		}
+		// Stale-while-revalidate: never hold a request on a global refresh lock.
 		if !s.refreshing[key] {
 			s.refreshing[key] = true
 			s.cacheMu.Unlock()
@@ -197,46 +207,61 @@ func (s *Server) listEvents(ctx context.Context, source, severity, since string,
 		s.cacheMu.Unlock()
 		return entry.events, nil
 	}
-	s.cacheMu.Unlock()
 
-	// Cold-cache path. Serialize the first fill so a burst of requests does not
-	// stampede the canonical store; later expiries use the stale path above.
-	s.refreshMu.Lock()
-	defer s.refreshMu.Unlock()
-
-	s.cacheMu.Lock()
-	if entry, ok := s.listCache[key]; ok {
-		events := entry.events
+	// Cold cache: coalesce all callers for this key onto one fill. The fill uses
+	// a background context so a client disconnect cannot poison the cache.
+	if fill, ok := s.fills[key]; ok {
 		s.cacheMu.Unlock()
-		return events, nil
+		select {
+		case <-fill.done:
+			return fill.events, fill.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
+	fill := &listFill{done: make(chan struct{})}
+	s.fills[key] = fill
 	s.cacheMu.Unlock()
 
-	events, err := s.store.List(ctx, source, since, limit)
-	if err != nil {
-		return nil, err
+	fill.events, fill.err = s.fetchList(context.Background(), source, since, limit)
+	s.cacheMu.Lock()
+	delete(s.fills, key)
+	close(fill.done)
+	s.cacheMu.Unlock()
+	if fill.err != nil {
+		return nil, fill.err
 	}
-	s.storeList(key, source, severity, events)
-	return filterSeverity(events, severity), nil
+	s.storeList(key, source, severity, fill.events)
+	return filterSeverity(fill.events, severity), nil
 }
 
 func (s *Server) refreshList(key, source, severity, since string, limit int) {
-	s.refreshMu.Lock()
-	defer s.refreshMu.Unlock()
 	defer func() {
 		s.cacheMu.Lock()
 		delete(s.refreshing, key)
 		s.cacheMu.Unlock()
 	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	events, err := s.store.List(ctx, source, since, limit)
+	events, err := s.fetchList(context.Background(), source, since, limit)
 	if err != nil {
-		// Keep the last-known-good entry. The next read will retry the refresh.
+		// Keep the last-known-good entry; the next request retries the refresh.
 		return
 	}
 	s.storeList(key, source, severity, events)
+}
+
+func (s *Server) fetchList(ctx context.Context, source, since string, limit int) ([]database.HazardEvent, error) {
+	if s.store == nil {
+		return nil, errors.New("canonical store is not configured")
+	}
+	select {
+	case s.storeSlots <- struct{}{}:
+		defer func() { <-s.storeSlots }()
+	case <-time.After(100 * time.Millisecond):
+		return nil, errors.New("canonical read bulkhead is full")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return s.store.List(ctx, source, since, limit)
 }
 
 func (s *Server) storeList(key, source, severity string, events []database.HazardEvent) {

@@ -1,0 +1,76 @@
+# One-shot bootstrap for lean Citus. Safe to keep in the repository; the Job
+# is idempotent and can be deleted/recreated without touching data volumes.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: citus-init
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: citus-init, app.kubernetes.io/part-of: bnpb, role: other}
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector: {bnpb.io/app-eligible: "true"}
+      securityContext: {runAsUser: 1000, runAsGroup: 1000, runAsNonRoot: true}
+      initContainers:
+      - name: roles-and-nodes
+        image: docker.io/citusdata/citus:13.0.1-pg16
+        imagePullPolicy: IfNotPresent
+        resources:
+          requests: {memory: 128Mi, cpu: 50m}
+          limits: {memory: 256Mi, cpu: 500m}
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -eu
+          COORD=citus-coordinator
+          W1=citus-worker-1
+          W2=citus-worker-2
+          W3=citus-worker-3
+          for host in "$COORD" "$W1" "$W2"; do
+            until pg_isready -h "$host" -U postgres >/dev/null 2>&1; do sleep 2; done
+          done
+          for host in "$COORD" "$W1" "$W2"; do
+            if ! psql -h "$host" -U postgres -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='canonical'" | grep -q 1; then
+              psql -h "$host" -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE canonical"
+            fi
+            psql -h "$host" -U postgres -d canonical -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS citus"
+            # Citus blocks role DDL on workers unless propagation is disabled
+            # for this local session. Keep the whole role bootstrap in one psql
+            # session so the SET applies to both statements.
+            psql -h "$host" -U postgres -d canonical -v ON_ERROR_STOP=1 \
+              -c "SET citus.enable_ddl_propagation=off" \
+              -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='canonical_app') THEN CREATE ROLE canonical_app LOGIN PASSWORD '$CANONICAL_APP_PASSWORD'; END IF; END \$\$;" \
+              -c "ALTER ROLE canonical_app PASSWORD '$CANONICAL_APP_PASSWORD'"
+          done
+          psql -h "$COORD" -U postgres -d canonical -v ON_ERROR_STOP=1 -c "SELECT citus_set_coordinator_host('$COORD',5432)"
+          for host in "$W1" "$W2"; do
+            psql -h "$COORD" -U postgres -d canonical -v ON_ERROR_STOP=1 -c "SELECT citus_add_node('$host',5432) WHERE NOT EXISTS (SELECT 1 FROM pg_dist_node WHERE nodename='$host')"
+          done
+          if pg_isready -h "$W3" -U postgres >/dev/null 2>&1; then
+            for host in "$W3"; do
+              psql -h "$host" -U postgres -d canonical -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS citus"
+              psql -h "$host" -U postgres -d canonical -v ON_ERROR_STOP=1 \
+                -c "SET citus.enable_ddl_propagation=off" \
+                -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='canonical_app') THEN CREATE ROLE canonical_app LOGIN PASSWORD '$CANONICAL_APP_PASSWORD'; END IF; END \$\$;" \
+                -c "ALTER ROLE canonical_app PASSWORD '$CANONICAL_APP_PASSWORD'"
+            done
+            psql -h "$COORD" -U postgres -d canonical -v ON_ERROR_STOP=1 -c "SELECT citus_add_node('$W3',5432) WHERE NOT EXISTS (SELECT 1 FROM pg_dist_node WHERE nodename='$W3')"
+          fi
+          psql -h "$COORD" -U postgres -d canonical -v ON_ERROR_STOP=1 -c "SELECT citus_set_node_property('$COORD',5432,'shouldhaveshards',true)"
+        env:
+        - name: CANONICAL_APP_PASSWORD
+          valueFrom: {secretKeyRef: {name: bnpb-canonical-cluster, key: CANONICAL_APP_PASSWORD}}
+      containers:
+      - name: schema
+        image: bnpb-gateway/aggregator:m2
+        imagePullPolicy: IfNotPresent
+        command: ["/app/canonical-admin", "migrate"]
+        env:
+        - name: CANONICAL_ADMIN_DSN
+          valueFrom: {secretKeyRef: {name: bnpb-citus-admin, key: CANONICAL_ADMIN_DSN}}
+        resources:
+          requests: {memory: 128Mi, cpu: 50m}
+          limits: {memory: 256Mi, cpu: 500m}

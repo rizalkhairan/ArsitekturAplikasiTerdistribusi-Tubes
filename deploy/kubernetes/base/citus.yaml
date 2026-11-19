@@ -1,0 +1,347 @@
+# Portable lean Citus storage.
+#
+# Node contract (set labels once per cluster):
+#   kubectl label node <control> bnpb.io/role=control bnpb.io/app-eligible=false
+#   kubectl label node <app>     bnpb.io/role=app     bnpb.io/app-eligible=true
+#   kubectl label node <store>   bnpb.io/role=store   bnpb.io/app-eligible=true
+#
+# Storage contract: the cluster must provide a `local-path` StorageClass
+# (k3s default). No host path or node IP is embedded in these manifests.
+apiVersion: v1
+kind: Service
+metadata:
+  name: citus-coordinator
+  namespace: sistem-informasi-kebencanaan-bnpb
+  labels: {app.kubernetes.io/part-of: bnpb, citus: "true"}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {app.kubernetes.io/name: citus-coordinator}
+  ports: [{name: postgres, port: 5432, targetPort: postgres}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: citus-worker-1
+  namespace: sistem-informasi-kebencanaan-bnpb
+  labels: {app.kubernetes.io/part-of: bnpb, citus: "true"}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {app.kubernetes.io/name: citus-worker-1}
+  ports: [{name: postgres, port: 5432, targetPort: postgres}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: citus-worker-2
+  namespace: sistem-informasi-kebencanaan-bnpb
+  labels: {app.kubernetes.io/part-of: bnpb, citus: "true"}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {app.kubernetes.io/name: citus-worker-2}
+  ports: [{name: postgres, port: 5432, targetPort: postgres}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: citus-worker-3
+  namespace: sistem-informasi-kebencanaan-bnpb
+  labels: {app.kubernetes.io/part-of: bnpb, citus: "true"}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {app.kubernetes.io/name: citus-worker-3}
+  ports: [{name: postgres, port: 5432, targetPort: postgres}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: citus-coordinator
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  serviceName: citus-coordinator
+  replicas: 1
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels: {app.kubernetes.io/name: citus-coordinator}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: citus-coordinator
+        app.kubernetes.io/part-of: bnpb
+        citus: "true"
+        role: store
+    spec:
+      nodeSelector: {bnpb.io/role: control}
+      tolerations:
+      - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+      terminationGracePeriodSeconds: 60
+      securityContext: {runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, fsGroupChangePolicy: OnRootMismatch, runAsNonRoot: true}
+      containers:
+      - name: postgres
+        image: docker.io/citusdata/citus:13.0.1-pg16
+        imagePullPolicy: IfNotPresent
+        command: ["/usr/local/bin/docker-entrypoint.sh"]
+        args:
+        - postgres
+        - -c
+        - shared_preload_libraries=citus
+        - -c
+        - wal_level=logical
+        - -c
+        - max_prepared_transactions=200
+        - -c
+        - max_wal_senders=32
+        - -c
+        - max_replication_slots=32
+        env:
+        - {name: POSTGRES_USER, value: postgres}
+        - {name: POSTGRES_DB, value: canonical}
+        - {name: PGDATA, value: /data/pgdata}
+        - {name: POSTGRES_HOST_AUTH_METHOD, value: trust}
+        - name: POSTGRES_PASSWORD
+          valueFrom: {secretKeyRef: {name: bnpb-canonical-cluster, key: PATRONI_SUPERUSER_PASSWORD}}
+        ports: [{name: postgres, containerPort: 5432}]
+        resources:
+          requests: {memory: 512Mi, cpu: 100m}
+          limits: {memory: 1Gi, cpu: "1"}
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        startupProbe:
+          exec: {command: [pg_isready, -h, 127.0.0.1, -p, "5432", -U, postgres]}
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 60
+        livenessProbe:
+          exec: {command: [pg_isready, -h, 127.0.0.1, -p, "5432", -U, postgres]}
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 12
+        readinessProbe:
+          exec: {command: [pg_isready, -h, 127.0.0.1, -p, "5432", -U, postgres]}
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 6
+        volumeMounts:
+        - {name: data, mountPath: /data}
+        - {name: run, mountPath: /var/run/postgresql}
+        - {name: tmp, mountPath: /tmp}
+      volumes:
+      - name: run
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+  volumeClaimTemplates:
+  - metadata: {name: data}
+    spec:
+      accessModes: [ReadWriteOnce]
+      storageClassName: local-path
+      resources: {requests: {storage: 10Gi}}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: citus-worker-1
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  serviceName: citus-worker-1
+  replicas: 1
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels: {app.kubernetes.io/name: citus-worker-1}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: citus-worker-1
+        app.kubernetes.io/part-of: bnpb
+        citus: "true"
+        role: store
+    spec:
+      nodeSelector: {bnpb.io/role: app}
+      terminationGracePeriodSeconds: 60
+      securityContext: {runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, fsGroupChangePolicy: OnRootMismatch, runAsNonRoot: true}
+      containers:
+      - name: postgres
+        image: docker.io/citusdata/citus:13.0.1-pg16
+        imagePullPolicy: IfNotPresent
+        command: ["/usr/local/bin/docker-entrypoint.sh"]
+        args: [postgres, -c, shared_preload_libraries=citus, -c, wal_level=logical, -c, max_prepared_transactions=200, -c, max_wal_senders=32, -c, max_replication_slots=32]
+        env:
+        - {name: POSTGRES_USER, value: postgres}
+        - {name: POSTGRES_DB, value: canonical}
+        - {name: PGDATA, value: /data/pgdata}
+        - {name: POSTGRES_HOST_AUTH_METHOD, value: trust}
+        - name: POSTGRES_PASSWORD
+          valueFrom: {secretKeyRef: {name: bnpb-canonical-cluster, key: PATRONI_SUPERUSER_PASSWORD}}
+        ports: [{name: postgres, containerPort: 5432}]
+        resources:
+          requests: {memory: 512Mi, cpu: 100m}
+          limits: {memory: 1Gi, cpu: "1"}
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        startupProbe:
+          exec: {command: [pg_isready, -h, 127.0.0.1, -p, "5432", -U, postgres]}
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 60
+        livenessProbe:
+          exec: {command: [pg_isready, -h, 127.0.0.1, -p, "5432", -U, postgres]}
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 12
+        readinessProbe:
+          exec: {command: [pg_isready, -h, 127.0.0.1, -p, "5432", -U, postgres]}
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 6
+        volumeMounts:
+        - {name: data, mountPath: /data}
+        - {name: run, mountPath: /var/run/postgresql}
+        - {name: tmp, mountPath: /tmp}
+      volumes:
+      - {name: run, emptyDir: {}}
+      - {name: tmp, emptyDir: {}}
+  volumeClaimTemplates:
+  - metadata: {name: data}
+    spec:
+      accessModes: [ReadWriteOnce]
+      storageClassName: local-path
+      resources: {requests: {storage: 10Gi}}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: citus-worker-2
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  serviceName: citus-worker-2
+  replicas: 1
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels: {app.kubernetes.io/name: citus-worker-2}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: citus-worker-2
+        app.kubernetes.io/part-of: bnpb
+        citus: "true"
+        role: store
+    spec:
+      nodeSelector: {bnpb.io/role: store}
+      terminationGracePeriodSeconds: 60
+      securityContext: {runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, fsGroupChangePolicy: OnRootMismatch, runAsNonRoot: true}
+      containers:
+      - name: postgres
+        image: docker.io/citusdata/citus:13.0.1-pg16
+        imagePullPolicy: IfNotPresent
+        command: ["/usr/local/bin/docker-entrypoint.sh"]
+        args: [postgres, -c, shared_preload_libraries=citus, -c, wal_level=logical, -c, max_prepared_transactions=200, -c, max_wal_senders=32, -c, max_replication_slots=32]
+        env:
+        - {name: POSTGRES_USER, value: postgres}
+        - {name: POSTGRES_DB, value: canonical}
+        - {name: PGDATA, value: /data/pgdata}
+        - {name: POSTGRES_HOST_AUTH_METHOD, value: trust}
+        - name: POSTGRES_PASSWORD
+          valueFrom: {secretKeyRef: {name: bnpb-canonical-cluster, key: PATRONI_SUPERUSER_PASSWORD}}
+        ports: [{name: postgres, containerPort: 5432}]
+        resources:
+          requests: {memory: 512Mi, cpu: 100m}
+          limits: {memory: 1Gi, cpu: "1"}
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        startupProbe:
+          exec: {command: [pg_isready, -h, 127.0.0.1, -p, "5432", -U, postgres]}
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 60
+        livenessProbe:
+          exec: {command: [pg_isready, -h, 127.0.0.1, -p, "5432", -U, postgres]}
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 12
+        readinessProbe:
+          exec: {command: [pg_isready, -h, 127.0.0.1, -p, "5432", -U, postgres]}
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 6
+        volumeMounts:
+        - {name: data, mountPath: /data}
+        - {name: run, mountPath: /var/run/postgresql}
+        - {name: tmp, mountPath: /tmp}
+      volumes:
+      - {name: run, emptyDir: {}}
+      - {name: tmp, emptyDir: {}}
+  volumeClaimTemplates:
+  - metadata: {name: data}
+    spec:
+      accessModes: [ReadWriteOnce]
+      storageClassName: local-path
+      resources: {requests: {storage: 10Gi}}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: citus-worker-3
+  namespace: sistem-informasi-kebencanaan-bnpb
+spec:
+  serviceName: citus-worker-3
+  replicas: 0
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels: {app.kubernetes.io/name: citus-worker-3}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: citus-worker-3
+        app.kubernetes.io/part-of: bnpb
+        citus: "true"
+        role: store
+    spec:
+      nodeSelector: {bnpb.io/role: app}
+      terminationGracePeriodSeconds: 60
+      securityContext: {runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, fsGroupChangePolicy: OnRootMismatch, runAsNonRoot: true}
+      containers:
+      - name: postgres
+        image: docker.io/citusdata/citus:13.0.1-pg16
+        imagePullPolicy: IfNotPresent
+        command: ["/usr/local/bin/docker-entrypoint.sh"]
+        args: [postgres, -c, shared_preload_libraries=citus, -c, wal_level=logical, -c, max_prepared_transactions=200, -c, max_wal_senders=32, -c, max_replication_slots=32]
+        env:
+        - {name: POSTGRES_USER, value: postgres}
+        - {name: POSTGRES_DB, value: canonical}
+        - {name: PGDATA, value: /data/pgdata}
+        - {name: POSTGRES_HOST_AUTH_METHOD, value: trust}
+        - name: POSTGRES_PASSWORD
+          valueFrom: {secretKeyRef: {name: bnpb-canonical-cluster, key: PATRONI_SUPERUSER_PASSWORD}}
+        ports: [{name: postgres, containerPort: 5432}]
+        resources:
+          requests: {memory: 512Mi, cpu: 100m}
+          limits: {memory: 1Gi, cpu: "1"}
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        startupProbe:
+          exec: {command: [pg_isready, -h, 127.0.0.1, -p, "5432", -U, postgres]}
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 60
+        livenessProbe:
+          exec: {command: [pg_isready, -h, 127.0.0.1, -p, "5432", -U, postgres]}
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 12
+        readinessProbe:
+          exec: {command: [pg_isready, -h, 127.0.0.1, -p, "5432", -U, postgres]}
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 6
+        volumeMounts:
+        - {name: data, mountPath: /data}
+        - {name: run, mountPath: /var/run/postgresql}
+        - {name: tmp, mountPath: /tmp}
+      volumes:
+      - {name: run, emptyDir: {}}
+      - {name: tmp, emptyDir: {}}
+  volumeClaimTemplates:
+  - metadata: {name: data}
+    spec:
+      accessModes: [ReadWriteOnce]
+      storageClassName: local-path
+      resources: {requests: {storage: 10Gi}}

@@ -24,9 +24,9 @@ KAFKA = "docker.io/apache/kafka:3.9.0"
 SECRET_KEYS = ("K3S_TOKEN", "BMKG_API_KEY", "PVMBG_TOKEN", "ADMIN_PASSWORD", "JWT_SECRET",
                "MEDIA_USER_PASSWORD", "FIELD_USER_PASSWORD", "INTERNAL_USER_PASSWORD", "INTERNAL_API_KEY", "GRAFANA_ADMIN_PASSWORD")
 PATHS = {
-    "node-control": ("bnpb-m1", "auth", "canonical-a-primary", "canonical-c-replica"),
-    "node-app": ("bmkg", "kafka", "canonical-a-replica", "canonical-b-primary"),
-    "node-store": ("pvmbg", "canonical-b-replica", "canonical-c-primary"),
+    "node-control": ("bnpb-m1", "auth"),
+    "node-app": ("bmkg", "kafka"),
+    "node-store": ("pvmbg",),
 }
 
 
@@ -156,7 +156,9 @@ def provision():
             print("Reusing existing node-control; its installation is unchanged", flush=True)
             prepare_disks(node)
             continue
-        labels = ["store-eligible=true", "aggregator-eligible=true"]
+        role = {"node-control": "control", "node-app": "app", "node-store": "store"}[name]
+        labels = ["store-eligible=true", "aggregator-eligible=true", "bnpb.io/role=" + role,
+                  "bnpb.io/app-eligible=" + ("false" if role == "control" else "true")]
         if name != "node-store":
             labels.append("app-eligible=true")
         config = {"node-name": name, "node-ip": node["ip"], "node-label": labels,
@@ -164,7 +166,7 @@ def provision():
         mode = "server" if name == "node-control" else "agent"
         if mode == "server":
             config.update({"tls-san": [control["ip"]], "advertise-address": control["ip"],
-                           "write-kubeconfig-mode": "0600", "disable": ["traefik", "servicelb", "local-storage"]})
+                           "write-kubeconfig-mode": "0600", "disable": ["traefik", "servicelb"]})
         else:
             config["server"] = f"https://{control['ip']}:6443"
         # JSON is valid YAML; a quoted heredoc keeps secrets out of shell expansion.
@@ -237,7 +239,9 @@ def cluster_check(inv):
             raise ValueError("Node hostname label must match its inventory name for local PV placement")
         if node["ip"] not in [a["address"] for a in actual["status"]["addresses"] if a["type"] == "InternalIP"]:
             raise ValueError("Inventory IP does not match the node's InternalIP")
-        labels = ["store-eligible=true", "aggregator-eligible=true"]
+        role = {"node-control": "control", "node-app": "app", "node-store": "store"}[node["name"]]
+        labels = ["store-eligible=true", "aggregator-eligible=true", "bnpb.io/role=" + role,
+                  "bnpb.io/app-eligible=" + ("false" if role == "control" else "true")]
         if node["name"] != "node-store":
             labels.append("app-eligible=true")
         else:
@@ -249,9 +253,6 @@ def cluster_check(inv):
 def render(tag="dev"):
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", tag):
         raise ValueError("Invalid image tag")
-    if os.getenv("CANONICAL_STORAGE") == "postgres":
-        import canonical
-        return canonical.render(tag)
     parent = ROOT / "deploy/kubernetes"
     with tempfile.TemporaryDirectory(prefix=".render-", dir=parent) as directory:
         overlay = {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization",
@@ -309,10 +310,6 @@ def images(architecture=None):
         run(["docker", "build", "--platform", "linux/" + architecture, "-t", image,
              "-f", directory / "Dockerfile", context])
         built.append(image)
-    if os.getenv("CANONICAL_STORAGE") == "postgres":
-        from canonical import IMAGE
-        run(["docker", "build", "--platform", "linux/" + architecture, "-t", IMAGE, ROOT / "deploy/canonical"])
-        built.append(IMAGE)
     from observability import IMAGES
     for image in (KAFKA, *IMAGES.values()):
         run(["docker", "pull", "--platform", "linux/" + architecture, image])
@@ -338,9 +335,6 @@ def image_bundle(inv):
         raise ValueError("Image bundle architecture does not match inventory")
     from observability import IMAGES
     expected = {f"bnpb.local/{name}:{tag}" for name in APPS} | {KAFKA} | set(IMAGES.values())
-    if os.getenv("CANONICAL_STORAGE") == "postgres":
-        from canonical import IMAGE
-        expected.add(IMAGE)
     if set(metadata.get("images", [])) != expected:
         raise ValueError("Image bundle must include application, Kafka and observability images")
     if metadata.get("sha256") != file_sha256(archive):
@@ -358,8 +352,6 @@ def deploy():
     archive, tag = image_bundle(inv)
     manifests = render(tag)
     cluster_check(inv)
-    from canonical import check_backend
-    check_backend(kubectl)
     for node in inv["nodes"]:
         prepare_disks(node)
         print(f"Importing images on {node['name']}", flush=True)
@@ -373,13 +365,7 @@ def deploy():
     from security import install
     install(kubectl)
     apply_secrets(creds)
-    if os.getenv("CANONICAL_STORAGE") == "postgres":
-        from canonical import apply_secrets as canonical_secrets
-        canonical_secrets(kubectl)
     kubectl("apply", "-f", "-", data=manifests)
-    if os.getenv("CANONICAL_STORAGE") == "postgres":
-        from canonical import initialize
-        initialize(kubectl, tag)
     kubectl("-n", NS, "rollout", "status", "deployment/kafka", "--timeout=240s")
     # Re-run idempotent topic creation after every deploy, including broker disk replacement.
     kubectl("-n", NS, "delete", "job", "topic-init", "--ignore-not-found", "--wait=true")

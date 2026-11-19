@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,9 +20,9 @@ import (
 )
 
 const (
-	readTimeout  = 15 * time.Second
-	unitTimeout  = 2 * time.Second
-	readWorkers  = 8
+	readTimeout  = 60 * time.Second
+	unitTimeout  = 8 * time.Second
+	readWorkers  = 16
 	maxReadBytes = 16 << 20
 	snapshotTTL  = 300 * time.Second
 )
@@ -88,6 +89,7 @@ func gather(ctx context.Context, reader shardReader, q Query) ([]Event, []string
 	defer cancel()
 	units, err := reader.inventory(ctx)
 	if err != nil {
+		log.Printf("canonical inventory before traversal: %v", err)
 		return nil, nil, storageError("coverage_unavailable", "cannot discover complete shard inventory")
 	}
 	if !validInventory(units) {
@@ -173,7 +175,12 @@ func gather(ctx context.Context, reader shardReader, q Query) ([]Event, []string
 	// Rebalancing may change placements safely, but splitting/removing shards
 	// changes the traversal's universe and must never be reported as complete.
 	after, err := reader.inventory(ctx)
-	if err != nil || !sameInventory(units, after) {
+	if err != nil {
+		log.Printf("canonical inventory after traversal: %v", err)
+		return nil, nil, storageError("coverage_changed", "shard inventory changed or could not be verified; retry a fresh traversal")
+	}
+	if !sameInventory(units, after) {
+		log.Printf("canonical inventory changed before=%v after=%v", units, after)
 		return nil, nil, storageError("coverage_changed", "shard inventory changed or could not be verified; retry a fresh traversal")
 	}
 	events := []Event{}
@@ -307,7 +314,7 @@ func (s *Store) Query(ctx context.Context, q Query) (Page, error) {
 	if err := q.validate(); err != nil {
 		return Page{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if q.Cursor != "" {
 		id, offset, err := decodeCursor(q.Cursor)
