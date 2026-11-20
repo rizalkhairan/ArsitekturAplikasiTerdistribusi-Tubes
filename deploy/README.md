@@ -128,20 +128,23 @@ kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator-0 -- \
     WHERE singleton;"
 ```
 
-Restore it and return to replicated mode:
+For a permanent loss, remove the node from Citus metadata after disabling; the
+canonical-api `replica-reconciler` sidecar restores the second copy on the
+surviving nodes:
 
 ```bash
-kubectl -n sistem-informasi-kebencanaan-bnpb scale statefulset citus-worker-2 --replicas=1
 kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator-0 -- \
   psql -h 127.0.0.1 -U postgres -d canonical -c \
-  "SELECT citus_activate_node('citus-worker-2',5432);
-   UPDATE canonical.recovery SET durability='replicated', fenced_node=NULL WHERE singleton;"
+  "SELECT citus_remove_node('citus-worker-2',5432);"
+# wait for the sidecar log to show under_after=0, then:
+kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator-0 -- \
+  psql -h 127.0.0.1 -U postgres -d canonical -c \
+  "UPDATE canonical.recovery SET durability='replicated', fenced_node=NULL WHERE singleton;"
 ```
 
-`citus_rebalance_start()` only balances placements that still exist; it does
-not recreate the second copy removed by `citus_disable_node`. After the node
-returns, list shards with fewer than 2 active copies and copy each missing
-replica (copying an events shard also copies its colocated outbox shard):
+To restore a missing replica manually, list shards with fewer than 2 active
+copies and copy each missing replica (copying an events shard also copies its
+colocated outbox shard):
 
 ```sql
 SELECT s.shardid,
@@ -170,9 +173,9 @@ kubectl -n sistem-informasi-kebencanaan-bnpb wait \
   --for=condition=complete job/citus-init --timeout=300s
 ```
 
-`citus-init` only registers the node; it does not add copies for existing
-shards. Use the copy procedure above until worker-3 carries 12 placements, then
-verify 48 active placements and 2 active copies per shard.
+After `citus-init`, the canonical-api `replica-reconciler` sidecar adds the
+missing copies automatically. Verify 48 active placements, 12 per node, and
+2 active copies per shard.
 
 ## Observability
 

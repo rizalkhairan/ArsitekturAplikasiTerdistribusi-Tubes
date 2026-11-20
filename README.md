@@ -996,6 +996,9 @@ berlanjut sampai `next_cursor=null`.
 
 **Kriteria 4 — worker hilang dan datanya hilang: tidak ada event yang hilang**
 
+Kriteria ini menguji **kehilangan permanen**: worker dimatikan dan seluruh
+datanya dihapus, sehingga tidak ada salinan lokal yang kembali.
+
 Hentikan sumber agar checksum stabil, lalu ambil baseline **lewat Aggregator**
 (sesuai kontrak Audit API):
 
@@ -1005,8 +1008,8 @@ curl -s -H "Authorization: Bearer $AUDIT_TOKEN" \
   "$AGG/internal/audit/checksum?source=BMKG" | jq '{count,checksum,partial}'
 ```
 
-Matikan worker dan hilangkan datanya (power-off VM `node-store`, atau pindahkan
-direktori local-path worker-2; jangan menyentuh PVC node lain):
+Matikan worker dan hapus datanya (power-off VM `node-store`, atau pindahkan
+direktori local-path worker-2):
 
 ```bash
 kubectl -n $NS scale statefulset citus-worker-2 --replicas=0
@@ -1038,14 +1041,15 @@ Harapan: checksum identik sebelum/selama/sesudah; read 200 dengan
 bila unit tidak terjangkau — tidak ada 500 dan tidak menggantung; write
 mengembalikan `durability` `"single_copy"`.
 
-Pulihkan worker:
+**Kehilangan permanen:** deklarasikan lalu hapus node dari metadata:
 
 ```bash
-kubectl -n $NS scale statefulset citus-worker-2 --replicas=1
-kubectl -n $NS wait --for=condition=ready pod/citus-worker-2-0 --timeout=300s
 kubectl -n $NS exec citus-coordinator-0 -- psql -U postgres -d canonical -c \
-  "SELECT citus_activate_node('citus-worker-2',5432);
-   UPDATE canonical.recovery SET durability='replicated', fenced_node=NULL WHERE singleton;"
+  "SELECT citus_remove_node('citus-worker-2',5432);"
+# sidecar menyalin shard yang tinggal 1 salinan ke node yang tersisa;
+# tunggu log sidecar "under_after=0", lalu:
+kubectl -n $NS exec citus-coordinator-0 -- psql -U postgres -d canonical -c \
+  "UPDATE canonical.recovery SET durability='replicated', fenced_node=NULL WHERE singleton;"
 ```
 
 **Kriteria 5 — tambah node**
@@ -1058,10 +1062,10 @@ kubectl apply -f deploy/kubernetes/base/citus-init.yaml
 kubectl -n $NS wait --for=condition=complete job/citus-init --timeout=420s
 ```
 
-`citus-init` hanya mendaftarkan node; ia tidak membuat salinan shard yang
-hilang. Lengkapi salinan dengan prosedur **Replikasi ulang** di bawah sampai
-worker-3 menanggung 12 placement. Harapan: 48 placement aktif, 12 per node,
-read/write tetap berjalan.
+Setelah `citus-init`, sidecar **replica-reconciler** mengisi salinan RF2 secara
+otomatis (lihat **Replikasi ulang** di bawah); verifikasi worker-3 menanggung
+12 placement. Harapan: 48 placement aktif, 12 per node, read/write tetap
+berjalan.
 
 **Kriteria 6 — kehilangan node kedua**
 
@@ -1099,9 +1103,18 @@ respons berisi `partial=true` dan `unavailable_units`, dan halaman menampilkan
 banner `Data belum lengkap` — bukan angka lengkap tanpa penanda.
 
 **Replikasi ulang setelah node hilang (dipakai kriteria 4–6).**
-`citus_rebalance_start()` hanya menyeimbangkan placement yang masih ada; ia
-**tidak** membuat salinan RF2 yang hilang. Cari shard dengan kurang dari 2
-salinan aktif, lalu salin dengan `citus_copy_shard_placement` (menyalin shard
+Sidecar `replica-reconciler` berjalan di setiap pod `canonical-api` dan
+menjalankan `canonical-admin reconcile-replicas` setiap 30 detik. Node aktif
+yang tidak menjawab probe ditunggu; node yang dinyatakan hilang
+(`citus_disable_node`/`citus_remove_node`) dipulihkan salinannya; pass dilewati
+saat `citus_rebalance_status()` berstatus `running`. Log:
+
+```bash
+kubectl -n $NS logs deploy/canonical-api -c replica-reconciler --tail=20
+```
+
+Untuk verifikasi atau fallback, cari shard dengan kurang dari 2 salinan aktif,
+lalu salin dengan `citus_copy_shard_placement` (menyalin shard
 `canonical.events` ikut menyalin shard `canonical.outbox` yang colocated):
 
 ```sql
@@ -1126,17 +1139,16 @@ placement aktif, 12 per node, setiap shard 2 salinan aktif.
 kubectl -n $NS scale deploy bmkg pvmbg sensor-pantai satellite-processor --replicas=1
 ```
 
-#### Hasil P1 yang sudah dibuktikan pada cluster demo
+#### Status P1 setelah rebuild bersih
 
-| Kriteria | Bukti |
+| Item | Status |
 |---|---|
-| Katalog + skew | 1.883 event katalog + 1.000 lonjakan satu wilayah; 12 shard 1.653–1.764 baris (avg 1.689) |
-| Beban lonjakan | control avg 5,04 → 7,56; app 2,75 → 2,80; store 4,23 → 5,10 |
-| Cross-shard pagination | `/v1/events` cursor, `partial=false` |
-| Node loss + data hilang | checksum BMKG via Aggregator identik (2.762 event, `partial=false`, 0,4 s), read 200 dalam 0,22 s, write `durability=single_copy` |
-| Node addition | worker-3 menanggung 12 dari 48 placement; read/write tetap jalan |
-| Node loss kedua | checksum tetap identik (2.764 event, `partial=false`, 12,2 s), read 200 dalam 0,7 s |
-| Analytics | total 19.242 = count Audit API; `partial` + banner saat unit hilang |
+| Sharding | 12 shard `canonical.events`, 12 shard `canonical.outbox` |
+| Replikasi | 48 placement aktif, 12 per node, 2 salinan per shard |
+| Node | coordinator + worker-1/2/3 aktif |
+| Reconciler | sidecar `canonical-api`: defer saat node aktif unreachable; menyalin setelah node dinyatakan hilang; advisory lock; guard rebalance |
+| Data | di-reset pada rebuild; jalankan `scripts/p1-synthetic-load.py` untuk mengisi ulang dataset sebelum merekam bukti |
+| Kehilangan permanen | `citus_disable_node` lalu `citus_remove_node`; sidecar memulihkan salinan RF2 |
 
 
 ### Milestone 2 - Problem 2: Ketahanan Aggregator

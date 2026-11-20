@@ -81,7 +81,7 @@ Secrets contain no committed real values. Reserve these names and keys:
 | --- | --- | --- |
 | `bnpb-audit-auth` | `token` | Aggregator Audit middleware only |
 | `bnpb-canonical-cluster` | `PATRONI_SUPERUSER_PASSWORD` (legacy key name; no Patroni deployment), `CANONICAL_APP_PASSWORD` | Citus StatefulSets and `citus-init` |
-| `bnpb-citus-admin` | `CANONICAL_ADMIN_DSN` | `citus-init` schema Job only |
+| `bnpb-citus-admin` | `CANONICAL_ADMIN_DSN` | `citus-init` schema Job and the `replica-reconciler` sidecar in canonical-api |
 | `bnpb-citus-api` | `CANONICAL_DSN` | `canonical-api` adapter |
 | `bnpb-bmkg-auth` | `api-key` | BMKG mock and authorized Aggregator poller |
 | `bnpb-pvmbg-auth` | `token` | PVMBG mock and authorized Aggregator poller |
