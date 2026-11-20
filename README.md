@@ -1157,20 +1157,23 @@ Problem 2 memakai kontrak kanonik M2 pada `contracts/m2/README.md` dan berbagi
 ingest pipeline dengan Problem 3/4.
 
 ```bash
-export BASE_URL=http://127.0.0.1:9080
-export AGG_URL=http://127.0.0.1:18085
+export BASE_URL=http://192.168.56.10:30081
 export INTERNAL_KEY="$(kubectl -n sistem-informasi-kebencanaan-bnpb get secret bnpb-secrets -o jsonpath='{.data.INTERNAL_API_KEY}' | base64 -d)"
-export SKIP_TTL_ENV=1
 
+./loadtest/preflight.sh
 ./loadtest/duplicate-detector.sh
 ./scripts/integration-pause-leader.sh
-./loadtest/scaling.sh
+GENERATOR_HOSTS="ubuntu@192.168.56.20 ubuntu@192.168.56.21" \
+  VUS=10000 DURATION=120s ./loadtest/scaling.sh
 ./loadtest/throughput.sh
-./loadtest/rolling-update.sh
+./scripts/tag-aggregator-version.sh
+NEW_IMAGE=bnpb-gateway/aggregator:m2-v2 VUS=500 \
+  ./loadtest/rolling-update.sh
 ```
 
-Kriteria 5 (freeze VM) memakai `VBoxManage controlvm <vm> savestate` lalu
-`startvm` dan `./loadtest/duplicate-detector.sh`. Detail ada di Bagian 10.
+Kriteria 5 (freeze VM) memakai `VBoxManage controlvm <vm-holder> pause`, jeda
+30 detik, lalu `resume`, dan `./loadtest/duplicate-detector.sh`. Detail ada di
+Bagian 10.
 
 Komponen:
 
@@ -1187,30 +1190,26 @@ Secret disiapkan.
 
 ### Pemeriksaan kriteria P2
 
-Semua perintah dijalankan di cluster demo dari root repository. Prasyarat:
-`kubectl`, `k6`, `jq`, `python3`, serta shell dengan `seq`/`awk`. Biarkan
-port-forward berikut tetap berjalan:
+Semua perintah dijalankan dari root repository. Prasyarat: `kubectl`,
+`python3`, `k6` pada generator **di luar pod** (host atau VM eksternal), dan
+`ssh`/`scp` bila memakai beberapa generator. Load test memakai NodePort
+`client-api` 30081; script menaikkan TTL token otomatis:
 
 ```bash
-# Raise the token TTL before starting the port-forwards. scaling/rolling scripts
-# must not roll client-api/auth while a one-shot port-forward is in use.
-kubectl -n sistem-informasi-kebencanaan-bnpb set env deployment/client-api TOKEN_TTL_SECONDS=3600
-kubectl -n sistem-informasi-kebencanaan-bnpb set env deployment/auth ACCESS_TOKEN_TTL_SECONDS=3600
-kubectl -n sistem-informasi-kebencanaan-bnpb rollout status deployment/client-api --timeout=120s
-kubectl -n sistem-informasi-kebencanaan-bnpb rollout status deployment/auth --timeout=120s
-
-# These loops survive pod restarts during scaling and rolling updates.
-bash scripts/port-forward-loop.sh client-api 9080 8080 >/tmp/pf-client.log 2>&1 &
-bash scripts/port-forward-loop.sh aggregator 18085 8085 >/tmp/pf-aggregator.log 2>&1 &
-export BASE_URL=http://127.0.0.1:9080
-export AGG_URL=http://127.0.0.1:18085
-export INTERNAL_KEY='<INTERNAL_API_KEY dari bnpb-secrets>'
-export SKIP_TTL_ENV=1
+export BASE_URL=http://192.168.56.10:30081
+export INTERNAL_KEY="$(kubectl -n sistem-informasi-kebencanaan-bnpb get secret bnpb-secrets -o jsonpath='{.data.INTERNAL_API_KEY}' | base64 -d)"
+./loadtest/preflight.sh
 ```
+
+Port-forward hanya diperlukan untuk pemeriksaan manual/audit, bukan untuk load
+test.
 
 **Kriteria 1 — satu titik masuk, readiness nyata, penyebaran, PDB**
 
 ```bash
+# Default manifest 3; pastikan tidak tertinggal di replica lain setelah rebuild.
+kubectl -n sistem-informasi-kebencanaan-bnpb scale deploy aggregator --replicas=3
+kubectl -n sistem-informasi-kebencanaan-bnpb rollout status deploy/aggregator --timeout=240s
 kubectl -n sistem-informasi-kebencanaan-bnpb get deploy aggregator -o wide
 kubectl -n sistem-informasi-kebencanaan-bnpb get pods -l app=aggregator -o wide
 kubectl -n sistem-informasi-kebencanaan-bnpb get endpoints aggregator
@@ -1222,17 +1221,14 @@ kubectl -n sistem-informasi-kebencanaan-bnpb describe deploy aggregator \
 Expected: 3/3 ready, endpoint berisi 3 alamat pada minimal dua node, PDB
 `minAvailable: 2`, dan `maxUnavailable: 0`.
 
-**Kriteria 2 dan 6 — tepat sekali saat beban tinggi dan scaling 3→5→2**
+**Kriteria 2 — tepat sekali pada operasi normal**
 
 ```bash
-./loadtest/scaling.sh
-jq '.metrics.error_rate_excl_controlled' loadtest/results/scaling-summary.json
 ./loadtest/duplicate-detector.sh
 ```
 
-Expected: error rate di bawah `0.01` di luar penolakan terkontrol, dan detector
-menghasilkan `RESULT: PASS` (tidak ada baris kanonik ganda, tidak ada dua
-instance pemanggil untuk sumber yang sama dalam satu detik).
+Expected: detector menghasilkan `RESULT: PASS` (tidak ada baris kanonik ganda,
+tidak ada dua instance pemanggil untuk sumber yang sama dalam satu detik).
 
 **Kriteria 3 — instance pemimpin mati**
 
@@ -1251,19 +1247,35 @@ kubectl -n tester-agent exec daemonset/tester-agent -- /app run practice kill-le
 **Kriteria 5 — holder freeze pada VM**
 
 Ini tidak dapat diuji secara jujur di kind karena node berbagi kernel dan tidak
-bisa disuspend sebagai VM. Jalankan pada cluster VM. Contoh VirtualBox:
+bisa disuspend sebagai VM. Jalankan pada cluster VM. Identifikasi dulu replica
+aggregator yang memegang lease dan VM yang menjalankannya:
 
 ```bash
-VBoxManage controlvm <nama-vm-worker> savestate
-# tunggu lebih lama dari LEASE_TTL (15s), lalu:
-VBoxManage startvm <nama-vm-worker> --type headless
+kubectl -n sistem-informasi-kebencanaan-bnpb get pods -l app=aggregator -o wide
+for pod in $(kubectl -n sistem-informasi-kebencanaan-bnpb get pods -l app=aggregator -o name); do
+  echo "== ${pod#pod/}"
+  kubectl -n sistem-informasi-kebencanaan-bnpb exec "${pod#pod/}" -- \
+    wget -qO- http://127.0.0.1:8085/metrics 2>/dev/null | grep 'lease_holder'
+done
+```
+
+Freeze VM yang menjalankan holder. Pemetaan node ke VM: `node-control` ->
+`node-control`, `node-app` -> `node-app`, `node-store` -> `node-machine`. Set
+`HOLDER_VM` sesuai hasil pemeriksaan di atas:
+
+```bash
+HOLDER_VM=node-machine   # contoh: holder berjalan di node-store
+VBoxManage controlvm "$HOLDER_VM" pause
+sleep 30
+VBoxManage controlvm "$HOLDER_VM" resume
 ./loadtest/duplicate-detector.sh
-kubectl -n sistem-informasi-kebencanaan-bnpb logs deploy/aggregator --tail=200 \
+kubectl -n sistem-informasi-kebencanaan-bnpb logs -l app=aggregator --tail=200 --prefix \
   | grep -E 'fenced|stale_epoch|lease_renew_failed|self_fenc'
 ```
 
-Expected: instance yang bangun tidak menyimpan hasil sampai statusnya diperbarui;
-epoch basi ditolak oleh canonical store.
+Expected: replica di VM lain mengambil alih lease; instance yang bangun
+self-fence dan tidak menyimpan hasil sampai statusnya diperbarui; epoch basi
+ditolak oleh canonical store.
 
 **Kriteria 4 — pergeseran jam node**
 
@@ -1273,34 +1285,74 @@ Jalankan pada cluster VM (bukan kind), karena kind memakai clock host bersama:
 kubectl -n tester-agent exec daemonset/tester-agent -- /app list
 kubectl -n tester-agent exec daemonset/tester-agent -- /app run practice clock-skew
 ./loadtest/duplicate-detector.sh
-kubectl -n sistem-informasi-kebencanaan-bnpb logs deploy/aggregator --tail=200 \
+kubectl -n sistem-informasi-kebencanaan-bnpb logs -l app=aggregator --tail=200 --prefix \
   | grep -E 'fenced|stale_epoch|lease_renew_failed'
 ```
 
 Expected: tidak ada dua instance yang sama-sama berhasil menyimpan pada periode
 polling yang sama; holder dengan epoch basi ditolak oleh canonical store.
 
-**Kriteria 7 — 3 instance ≥ 2× throughput 1 instance**
+**Kriteria 6 — tepat sekali saat beban tinggi dan scaling 3→5→2**
+
+Jalankan k6 dari host/VM eksternal, bukan dari pod. Total VU harus ≥10.000.
+Contoh dengan dua generator eksternal:
 
 ```bash
-./loadtest/throughput.sh
+export BASE_URL=http://192.168.56.10:30081
+export INTERNAL_KEY="$(kubectl -n sistem-informasi-kebencanaan-bnpb get secret bnpb-secrets -o jsonpath='{.data.INTERNAL_API_KEY}' | base64 -d)"
+GENERATOR_HOSTS="ubuntu@192.168.56.20 ubuntu@192.168.56.21" \
+  VUS=10000 DURATION=120s ./loadtest/scaling.sh
 ```
 
-Expected: output berakhir dengan `ratio ... (target >= 2.0)` dan exit code 0.
+Script membagi VU ke semua generator, melakukan scaling 3→5 pada detik ke-20
+dan 5→2 pada detik ke-60, menggabungkan summary, lalu menjalankan duplicate
+detector. Untuk smoke test satu generator: `VUS=1000 DURATION=120s
+ALLOW_SMALL=1 RUN_DETECTOR=0 ./loadtest/scaling.sh`.
+
+Expected: `scaling-aggregate.json` menunjukkan
+`error_rate_excl_controlled` di bawah `0.01` dan detector `RESULT: PASS`.
+p95 dilaporkan tetapi bukan gate kriteria 6.
+
+**Kriteria 7 — 3 instance ≥ 2× throughput 1 instance**
+
+Script membuat NodePort Service sementara untuk Aggregator (bukan
+`kubectl port-forward`) dan menghapusnya saat selesai. Kalibrasi jumlah VU
+terlebih dahulu, lalu jalankan kedua leg:
+
+```bash
+CALIBRATE=1 ./loadtest/throughput.sh
+VUS=2000 DURATION=60s ./loadtest/throughput.sh
+```
+
+Expected: output berakhir dengan `ratio ... (target >= 2.0)` dan exit code 0;
+throughput dihitung dari respons 200 yang sukses, bukan dari 429.
 
 **Kriteria 8 — rolling update tanpa permintaan gagal**
 
+Kriteria 8 tidak mewajibkan 10.000 VU. Gunakan beban yang menghasilkan nol 429
+dan nol error, misalnya 500 VU. Siapkan image versi baru di semua node terlebih
+dahulu:
+
 ```bash
-./loadtest/rolling-update.sh
-jq '.metrics.unexpected_errors' loadtest/results/rolling-summary.json
+./scripts/tag-aggregator-version.sh
+NEW_IMAGE=bnpb-gateway/aggregator:m2-v2 \
+  VUS=500 DURATION=120s ROLLOUT_AT=30 ./loadtest/rolling-update.sh
 ```
 
-Expected: `unexpected_errors=0`; penolakan terkontrol `429` tidak dihitung.
+Jika punya image v2 hasil build sendiri, import dengan tag tersebut dan set
+`NEW_IMAGE` sesuai tag itu. Script mengganti image dengan `kubectl set image`
+saat beban berjalan, menunggu rollout, lalu memeriksa semua pod memakai image
+baru.
+
+Expected: `unexpected_errors=0`, `controlled_rejections=0`, dan seluruh pod
+Aggregator `Running` dengan image baru. Set `ALLOW_CONTROLLED=1` hanya jika 429
+memang ingin dikecualikan.
 
 **Audit proxy**
 
 ```bash
-export AUDIT_TOKEN='<AUDIT_TOKEN dari bnpb-secrets>'
+kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/aggregator 18085:8085 >/tmp/pf-aggregator.log 2>&1 &
+export AUDIT_TOKEN="$(kubectl -n sistem-informasi-kebencanaan-bnpb get secret bnpb-secrets -o jsonpath='{.data.AUDIT_TOKEN}' | base64 -d)"
 for path in events checksum location unprocessed; do
   curl -s -H "Authorization: Bearer $AUDIT_TOKEN" \
     "http://127.0.0.1:18085/internal/audit/$path?limit=5" | jq .
