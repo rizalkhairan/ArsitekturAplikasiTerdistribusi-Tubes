@@ -15,6 +15,7 @@ const PASS = __ENV.K6_PASSWORD || 'field-pass-2026';
 const INTERNAL_KEY = __ENV.INTERNAL_KEY || '';
 
 const controlled = new Counter('controlled_rejections');
+const successful = new Counter('successful_responses');
 const unexpected = new Counter('unexpected_errors');
 const unexpectedStatus = new Counter('unexpected_status');
 const unexpectedNetwork = new Counter('unexpected_network');
@@ -22,6 +23,14 @@ const unexpectedHTTP = new Counter('unexpected_http');
 const unexpected4xx = new Counter('unexpected_4xx');
 const unexpected5xx = new Counter('unexpected_5xx');
 const errorRate = new Rate('error_rate_excl_controlled');
+
+// The P2 criteria gate on the error rate, not on a latency SLO. Keep p95 in
+// the summary, but only enforce it when P95_MS is explicitly set (for an
+// optional latency run).
+const thresholds = { error_rate_excl_controlled: ['rate<0.01'] };
+if (__ENV.P95_MS) {
+  thresholds['http_req_duration{expected_response:true}'] = [`p(95)<${Number(__ENV.P95_MS)}`];
+}
 
 export const options = {
   scenarios: {
@@ -32,10 +41,7 @@ export const options = {
       gracefulStop: '30s',
     },
   },
-  thresholds: {
-    error_rate_excl_controlled: ['rate<0.01'],
-    'http_req_duration{expected_response:true}': ['p(95)<1000'],
-  },
+  thresholds,
   summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
 };
 
@@ -64,6 +70,7 @@ export default function (data) {
   });
 
   if (res.status === 200) {
+    successful.add(1);
     check(res, { 'status is 200': (r) => r.status === 200 });
     errorRate.add(false);
   } else if (res.status === 429) {

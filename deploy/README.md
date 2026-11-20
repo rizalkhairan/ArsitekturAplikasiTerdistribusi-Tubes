@@ -59,7 +59,8 @@ bash scripts/citus-secrets.sh
 The values come from the environment or from the private
 `deploy/k3s/.canonical.env` file. If that file does not exist, export
 `CANONICAL_APP_PASSWORD` and `POSTGRES_PASSWORD` (or
-`PATRONI_SUPERUSER_PASSWORD`) before running the script.
+`PATRONI_SUPERUSER_PASSWORD`, a legacy key name; no Patroni is deployed) before
+running the script.
 
 ## Deploy
 
@@ -87,7 +88,7 @@ citus-worker-1:5432
 citus-worker-2:5432
 citus-worker-3:5432
 canonical-api:8080
-canonical-store:8080   # compatibility alias
+canonical-store:8080   # compatibility alias only; the adapter is canonical-api
 ```
 
 `citus-init` waits for the coordinator and workers, creates the database,
@@ -127,15 +128,38 @@ kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator-0 -- \
     WHERE singleton;"
 ```
 
-Restore it and return to replicated mode:
+For a permanent loss, remove the node from Citus metadata after disabling; the
+canonical-api `replica-reconciler` sidecar restores the second copy on the
+surviving nodes:
 
 ```bash
-kubectl -n sistem-informasi-kebencanaan-bnpb scale statefulset citus-worker-2 --replicas=1
 kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator-0 -- \
   psql -h 127.0.0.1 -U postgres -d canonical -c \
-  "SELECT citus_activate_node('citus-worker-2',5432);
-   UPDATE canonical.recovery SET durability='replicated', fenced_node=NULL WHERE singleton;"
+  "SELECT citus_remove_node('citus-worker-2',5432);"
+# wait for the sidecar log to show under_after=0, then:
+kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator-0 -- \
+  psql -h 127.0.0.1 -U postgres -d canonical -c \
+  "UPDATE canonical.recovery SET durability='replicated', fenced_node=NULL WHERE singleton;"
 ```
+
+To restore a missing replica manually, list shards with fewer than 2 active
+copies and copy each missing replica (copying an events shard also copies its
+colocated outbox shard):
+
+```sql
+SELECT s.shardid,
+       (SELECT count(*) FROM pg_dist_placement p JOIN pg_dist_node n USING(groupid)
+         WHERE p.shardid=s.shardid AND p.shardstate=1 AND n.isactive) AS copies
+FROM pg_dist_shard s
+WHERE s.logicalrelid='canonical.events'::regclass
+ORDER BY 1;
+
+-- example: copy one shard to a node that has no copy
+SELECT citus_copy_shard_placement(102018,'citus-worker-1',5432,'citus-coordinator',5432,'auto');
+```
+
+Repeat for every shard with `copies < 2`, choosing a target without a copy.
+Verify 48 active placements, 12 per node, and 2 active copies per shard.
 
 Add a fourth worker:
 
@@ -149,7 +173,9 @@ kubectl -n sistem-informasi-kebencanaan-bnpb wait \
   --for=condition=complete job/citus-init --timeout=300s
 ```
 
-Then rebalance/verify the placement count and keep replication factor 2.
+After `citus-init`, the canonical-api `replica-reconciler` sidecar adds the
+missing copies automatically. Verify 48 active placements, 12 per node, and
+2 active copies per shard.
 
 ## Observability
 

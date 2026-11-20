@@ -29,8 +29,8 @@ to restore the complete fixture dataset.
 
 ## Ownership and routing
 
-Canonical storage remains inside the Aggregator (`services/bnpb`); PostgreSQL
-is private to that service. A owns the storage/query/audit modules; B owns the
+Canonical storage is the Citus-backed `canonical-api` adapter (the same
+`services/bnpb` image); PostgreSQL is reachable only from that adapter. A owns the storage/query/audit modules; B owns the
 Aggregator server, authentication, routing, polling and lease authority; C owns
 pipeline input, DLQ, offsets and processing state. C calls the authenticated
 Aggregator write API and never connects to canonical tables. These are module
@@ -139,7 +139,8 @@ simulates serialized writes. It has no lease issuance or lease-expiry claim.
 
 `GET /internal/canonical/events` is implemented for the PostgreSQL backend with
 the existing internal read key (producer Bearer tokens grant no read access).
-It uses the following response and filters; Audit routes remain A10 work.
+It uses the following response and filters. The Lampiran A Audit routes are
+implemented by the Aggregator behind the audit Bearer token.
 `source` optional, `since` inclusive on **ingested_at**, `limit` defaults to 100,
 range 1–1000, `cursor` opaque. Sort ascending by `(ingested_at, hazard_id)`.
 Response: `{items, next_cursor, partial, unavailable_units}`; final cursor is null.
@@ -168,10 +169,13 @@ standbys or an unfinished rebalance target. Metadata locks protect each shard's
 placement/routing during its read; normal event writes continue. Verify the
 entire hash space before gathering and the same shard inventory afterward.
 Unknown/inconsistent inventory returns 503 `coverage_unavailable`/`coverage_changed`.
-Safe Patroni promotion/fencing remains an A07/A08 prerequisite; no split-brain
-or global read-after-write guarantee is added here.
+This P1 design deliberately uses Citus without Patroni. Safe promotion/fencing
+would be an A07/A08 prerequisite for stronger guarantees; no split-brain or
+global read-after-write guarantee is claimed here.
 
-Four workers use 400 ms per shard, a 6 s gather budget and an 8 s request budget.
+The deployed traversal uses a 5 s fast-path cap, a 12 s gather budget and a 4 s
+per-shard timeout. An unreachable placement yields `partial: true` with
+`unavailable_units` instead of hanging the request.
 Timeouts, missing placements, failed copies or a per-shard cap (10,000 rows or
 4 MiB, including tombstones) omit the **whole shard** and return 200 with
 `partial:true` and sorted `unavailable_units:["shard-<id>",...]`. All shards

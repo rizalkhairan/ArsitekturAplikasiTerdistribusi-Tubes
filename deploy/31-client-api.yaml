@@ -32,14 +32,23 @@ spec:
               valueFrom: {secretKeyRef: {name: bnpb-secrets, key: INTERNAL_API_KEY}}
             - name: FIELD_REPORT_TOKEN
               valueFrom: {secretKeyRef: {name: bnpb-secrets, key: FIELD_REPORT_TOKEN}}
+          startupProbe:
+            httpGet: {path: /health, port: 8080}
+            periodSeconds: 2
+            failureThreshold: 30
+            timeoutSeconds: 3
           readinessProbe:
             httpGet: {path: /readyz, port: 8080}
             initialDelaySeconds: 3
             periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 5
           livenessProbe:
             httpGet: {path: /health, port: 8080}
-            initialDelaySeconds: 5
+            initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
           resources:
             requests: {memory: 128Mi}
             limits: {memory: 256Mi}

@@ -59,6 +59,14 @@ func (s *server) auditChecksum(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 
+	// Fast path: one distributed merge scan. The cursor traversal below is
+	// kept for when a placement is unreachable, where it can mark the exact
+	// unavailable units instead of failing the whole checksum.
+	if ids, ok := s.checksumIDs(ctx, source); ok {
+		writeChecksum(w, source, ids, false, nil)
+		return
+	}
+
 	ids := []string{}
 	units := []string{}
 	seenUnits := map[string]bool{}
@@ -90,6 +98,43 @@ func (s *server) auditChecksum(w http.ResponseWriter, r *http.Request) {
 		cursor = *page.NextCursor
 	}
 
+	writeChecksum(w, source, ids, partial, units)
+}
+
+// checksumIDs returns the surviving source_ref_id values in one SQL merge.
+// It uses the same identity as the event traversal (source + source_ref_id,
+// highest version wins, retractions dropped) and reports ok=false so the
+// caller can fall back to the partial-capable cursor path.
+func (s *server) checksumIDs(ctx context.Context, source string) ([]string, bool) {
+	fastCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	rows, err := s.store.DB.QueryContext(fastCtx, `SELECT source_ref_id FROM (
+		SELECT source_ref_id, operation,
+		       row_number() OVER (PARTITION BY source, source_ref_id ORDER BY version DESC) AS rn
+		FROM canonical.events WHERE ($1 = '' OR source = $1)
+	) merged WHERE rn = 1 AND operation = 'upsert' ORDER BY source_ref_id`, source)
+	if err != nil {
+		log.Printf("canonical checksum fast path unavailable (%v); falling back to cursor traversal", err)
+		return nil, false
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			log.Printf("canonical checksum fast path scan failed (%v); falling back to cursor traversal", err)
+			return nil, false
+		}
+		ids = append(ids, id)
+	}
+	if err = rows.Err(); err != nil {
+		log.Printf("canonical checksum fast path iteration failed (%v); falling back to cursor traversal", err)
+		return nil, false
+	}
+	return ids, true
+}
+
+func writeChecksum(w http.ResponseWriter, source string, ids []string, partial bool, units []string) {
 	sort.Strings(ids)
 	digest := sha256.New()
 	for index, id := range ids {
@@ -99,6 +144,9 @@ func (s *server) auditChecksum(w http.ResponseWriter, r *http.Request) {
 		_, _ = digest.Write([]byte(id))
 	}
 	sort.Strings(units)
+	if units == nil {
+		units = []string{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"source":            source,
 		"count":             len(ids),
@@ -215,4 +263,3 @@ func mapCitusNode(service string) string {
 	}
 	return service
 }
-

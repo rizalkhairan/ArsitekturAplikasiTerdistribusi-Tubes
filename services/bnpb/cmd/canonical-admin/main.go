@@ -16,22 +16,24 @@ import (
 
 func main() {
 	legacyPath := flag.String("sqlite", "", "quiescent M1 database to import read-only")
+	dryRun := flag.Bool("dry-run", false, "plan replica copies without applying them")
 	flag.Parse()
-	if flag.NArg() != 1 || (flag.Arg(0) != "migrate" && flag.Arg(0) != "import-m1") {
-		log.Fatal("usage: canonical-admin [-sqlite PATH] migrate|import-m1 (CANONICAL_ADMIN_DSN required)")
+	if flag.NArg() != 1 || (flag.Arg(0) != "migrate" && flag.Arg(0) != "import-m1" && flag.Arg(0) != "reconcile-replicas") {
+		log.Fatal("usage: canonical-admin [-sqlite PATH] [-dry-run] migrate|import-m1|reconcile-replicas (CANONICAL_ADMIN_DSN required)")
 	}
 	dsn := os.Getenv("CANONICAL_ADMIN_DSN")
 	if dsn == "" {
 		log.Fatal("CANONICAL_ADMIN_DSN is required")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		log.Fatal("invalid PostgreSQL configuration")
 	}
 	defer db.Close()
-	if flag.Arg(0) == "import-m1" {
+	switch flag.Arg(0) {
+	case "import-m1":
 		if *legacyPath == "" {
 			log.Fatal("-sqlite is required")
 		}
@@ -41,6 +43,15 @@ func main() {
 			log.Fatal(err)
 		}
 		log.Printf("imported %d M1 events; IDs and outbox state preserved", n)
+		return
+	case "reconcile-replicas":
+		store := canonical.Store{DB: db}
+		summary, err := store.ReconcileReplicas(ctx, *dryRun)
+		log.Printf("replica reconcile: rf=%d shards=%d under_before=%d copies_created=%d under_after=%d unreachable=%v dry_run=%v",
+			summary.RF, summary.Shards, summary.UnderBefore, summary.CopiesCreated, summary.UnderAfter, summary.UnreachableNode, summary.DryRun)
+		if err != nil {
+			log.Fatal(err)
+		}
 		return
 	}
 	err = canonical.Migrate(ctx, db)

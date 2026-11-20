@@ -19,7 +19,7 @@ data:
   # Persist at most this many reports per tick so a large backlog still
   # advances the checkpoint between transient write failures.
   PVMBG_BATCH_LIMIT: "100"
-  BMKG_BATCH_LIMIT: "100"
+  BMKG_BATCH_LIMIT: "5000"
   # Canonical writes serialize on the partition authority row; 4s timed out
   # under node load before the redundant lease transaction was removed.
   UPSTREAM_TIMEOUT: 15s
@@ -34,6 +34,11 @@ data:
 
   # P2/P5 do not require C's broker. The critical-alert outbox is B-owned.
   KAFKA_ENABLED: "false"
+  # canonical-api drains canonical.outbox to Kafka; the advisory lock keeps one
+  # replica publishing at a time.
+  CANONICAL_OUTBOX_ENABLED: "true"
+  CANONICAL_OUTBOX_INTERVAL: 1s
+  KAFKA_BROKERS: kafka:9092
   MIRROR_LOCAL_DB: "false"
 
   SENSOR_POLL_INTERVAL: 2s

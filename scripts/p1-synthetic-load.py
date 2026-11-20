@@ -8,6 +8,7 @@ pagination, checksums and node-loss partial responses.
 import concurrent.futures
 import datetime as dt
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -15,22 +16,26 @@ import urllib.request
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:18081"
 COUNT = int(sys.argv[2]) if len(sys.argv) > 2 else 500
 WORKERS = 16
+# REF_PREFIX keeps a surge batch distinct from the catalog batch; AREA forces
+# every row into one region so a geographically skewed surge can be generated.
+PREFIX = os.environ.get("REF_PREFIX", "synthetic-p1")
+AREA = os.environ.get("AREA", "")
 SEVERITIES = ("NORMAL", "WASPADA", "SIAGA", "AWAS")
 
 
 def put(index):
-    ref = f"synthetic-p1-{index:06d}"
+    ref = f"{PREFIX}-{index:06d}"
     now = dt.datetime(2026, 11, 19, 2, 0, tzinfo=dt.timezone.utc)
     occurred = now - dt.timedelta(minutes=index)
     body = {
         "version": 1,
         "operation": "upsert",
         "authority": {"partition": "P1_SYNTHETIC", "epoch": 1},
-        "correlation_id": f"p1-synthetic-{index:06d}",
+        "correlation_id": f"{PREFIX}-{index:06d}",
         "event": {
             "hazard_type": "SEISMIC",
             "severity": SEVERITIES[index % len(SEVERITIES)],
-            "area_name": f"Synthetic Region {index % 17:02d}",
+            "area_name": AREA or f"Synthetic Region {index % 17:02d}",
             "latitude": -6.0 + (index % 100) / 100.0,
             "longitude": 106.0 + (index % 100) / 100.0,
             "occurred_at": occurred.isoformat().replace("+00:00", "Z"),
@@ -43,7 +48,10 @@ def put(index):
         },
     }
     request = urllib.request.Request(
-        f"{BASE}/internal/canonical/events/BMKG/{ref}",
+        # The historical catalog is BMKG/earthquake data. BMKG writes are
+        # fenced, so the synthetic loader uses the admin replay route, which
+        # is the same path used for DLQ recovery.
+        f"{BASE}/internal/admin/events/BMKG/{ref}",
         data=json.dumps(body).encode(),
         method="PUT",
         headers={"Content-Type": "application/json"},

@@ -13,6 +13,7 @@ spec:
   template:
     metadata:
       labels:
+        app: prometheus
         app.kubernetes.io/name: prometheus
         app.kubernetes.io/part-of: bnpb
         app.kubernetes.io/component: telemetry
@@ -280,12 +281,12 @@ spec:
           containerPort: 4317
         env:
         - name: GOMEMLIMIT
-          value: 180MiB
+          value: 768MiB
         resources:
           requests:
-            memory: 128Mi
-          limits:
             memory: 256Mi
+          limits:
+            memory: 1Gi
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true

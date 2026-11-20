@@ -78,6 +78,24 @@ spec:
           periodSeconds: 10
           timeoutSeconds: 3
           failureThreshold: 6
+      # Storage-side reconciler: runs in the canonical-api pod because that pod
+      # is the identity the Citus isolation policy admits on 5432. It restores
+      # RF2 copies when a worker is unreachable or its placements were removed.
+      # The advisory lock in the command keeps the two replicas from copying
+      # at the same time.
+      - name: replica-reconciler
+        image: bnpb-gateway/aggregator:m2
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/sh", "-c"]
+        args:
+        - "while true; do /app/canonical-admin reconcile-replicas; sleep 30; done"
+        env:
+        - name: CANONICAL_ADMIN_DSN
+          valueFrom: {secretKeyRef: {name: bnpb-citus-admin, key: CANONICAL_ADMIN_DSN}}
+        resources:
+          requests: {memory: 128Mi, cpu: 10m}
+          limits: {memory: 256Mi, cpu: 200m}
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
       volumes:
       - name: citus-node-map
         configMap:
