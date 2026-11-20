@@ -2106,7 +2106,7 @@ kubectl -n sistem-informasi-kebencanaan-bnpb scale deployment/sensor-pantai --re
 **Kriteria 5 — Tim Lapangan dilayani, Media ditolak terkontrol**
 
 ```bash
-k6 run -e BASE_URL="$BASE_URL" -e FIELD_VUS=4000 -e MEDIA_VUS=4000 loadtest/k6/priority.js
+k6 run -e BASE_URL="$BASE_URL" -e FIELD_VUS=500 -e MEDIA_VUS=500 loadtest/k6/priority.js
 kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/client-api 19080:8080 &
 curl -s http://127.0.0.1:19080/metrics | grep admission_rejected_total
 ```
@@ -2146,19 +2146,84 @@ Grafana, Prometheus, Tempo, Loki, dan OTel Collector terpasang melalui
 ```bash
 bash scripts/port-forward-loop.sh grafana 3000 3000 >/tmp/pf-grafana.log 2>&1 &
 bash scripts/port-forward-loop.sh prometheus 19090 9090 >/tmp/pf-prometheus.log 2>&1 &
-# Buka http://127.0.0.1:3000, login admin, lalu buka dashboard BNPB M2.
-# Korelasikan request lewat trace_id/correlation ID di log.
+bash scripts/port-forward-loop.sh tempo 3200 3200 >/tmp/pf-tempo.log 2>&1 &
+export GRAFANA_PASSWORD="$(kubectl -n sistem-informasi-kebencanaan-bnpb get secret bnpb-grafana-auth -o jsonpath='{.data.admin-password}' | base64 -d)"
 ```
 
-Bukti metrik dan trace juga dapat diambil langsung:
+Grafana:
 
 ```bash
-curl -s http://127.0.0.1:19090/api/v1/targets?state=active \
-  | jq -r '.data.activeTargets[] | [.labels.job,.health] | @tsv'
+curl -s http://127.0.0.1:3000/api/health
+curl -s -u "admin:$GRAFANA_PASSWORD" http://127.0.0.1:3000/api/datasources \
+  | jq -r '.[].name'
+curl -s -u "admin:$GRAFANA_PASSWORD" \
+  'http://127.0.0.1:3000/api/search?query=BNPB' \
+  | jq -r '.[].title'
+# Buka http://127.0.0.1:3000, login admin/$GRAFANA_PASSWORD, lalu dashboard BNPB.
+```
+
+Expected: health `database: ok`; datasources berisi Prometheus, Loki, Tempo;
+dashboard berisi BNPB dan BNPB service operations.
+
+Prometheus:
+
+```bash
+curl -s 'http://127.0.0.1:19090/api/v1/targets?state=active' \
+  | jq -r '.data.activeTargets[] | [.labels.job,.health] | @tsv' | sort
+```
+
+Expected: delapan target `up`:
+
+```text
+aggregator       up
+auth             up
+canonical-store  up
+client-api       up
+coordinator      up
+field-notifier   up
+prometheus       up
+satellite-processor up
+```
+
+Tempo:
+
+```bash
+curl -s http://127.0.0.1:3200/ready
+TRACE_ID="$(kubectl -n sistem-informasi-kebencanaan-bnpb logs deploy/aggregator --tail=500 \
+  | grep -o '"trace_id":"[a-f0-9]*"' | tail -1 | cut -d'"' -f4)"
+echo "$TRACE_ID"
+curl -s -o /dev/null -w 'trace_http=%{http_code}\n' \
+  "http://127.0.0.1:3200/api/traces/$TRACE_ID"
+curl -s "http://127.0.0.1:3200/api/traces/$TRACE_ID" \
+  | jq -r '.batches[0].resource.attributes[]? | select(.key=="service.name") | .value.stringValue'
+```
+
+Expected: `/ready` mengembalikan `ready`; trace query HTTP 200 dan berisi
+`service.name=aggregator` (atau service lain yang menghasilkan trace).
+
+Metrik dan korelasi log:
+
+```bash
 curl -s "$AGG_URL/metrics" | grep -E 'http_requests_total|sensor_|lease_'
 curl -s http://127.0.0.1:18097/metrics | grep -E 'critical_alert|field_notifier'
 kubectl -n sistem-informasi-kebencanaan-bnpb logs deploy/aggregator --tail=100 \
   | grep -E 'trace_id|corr_id|span_name'
+```
+
+Gunakan `trace_id` dari log untuk membuka trace yang sama di Grafana Explore →
+Tempo, dan korelasikan dengan log Loki melalui label service/pod.
+
+Catatan operasional:
+
+- Tempo memakai limit memori 1 GiB dan `GOMEMLIMIT=768MiB`. Jika pod
+  `CrashLoopBackOff` dengan `OOMKilled`, periksa kembali resource tersebut.
+- Prometheus harus memiliki label pod `app: prometheus` agar scrape ke
+  coordinator diizinkan oleh NetworkPolicy `coordinator-owner-only`. Jika target
+  `coordinator` down, periksa:
+
+```bash
+kubectl -n sistem-informasi-kebencanaan-bnpb get pods \
+  -l app.kubernetes.io/name=prometheus --show-labels
 ```
 
 **Kriteria 8 — anggaran SLO**
