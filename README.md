@@ -925,95 +925,219 @@ nama Service, lalu menjalankan migrasi schema embedded.
 `READ_CACHE_TTL` default 5 detik; cache memakai singleflight dan stale-on-error,
 sedangkan freshness sumber diperbarui di background, bukan di request path.
 
-#### Uji P1
+#### Uji P1 per kriteria
+
+Prasyarat (dari root repository, klaster demo):
 
 ```bash
-kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator-0 -- \
-  psql -h 127.0.0.1 -U postgres -d canonical -At <<'SQL'
-SELECT count(*) FROM pg_dist_shard WHERE logicalrelid='canonical.events'::regclass;
-SELECT count(*) FROM pg_dist_placement p JOIN pg_dist_node n USING(groupid)
- WHERE n.isactive AND p.shardstate=1;
-SELECT canonical.replication_ready(), canonical.primaries_ready();
-SQL
+export NS=sistem-informasi-kebencanaan-bnpb
+bash scripts/port-forward-loop.sh canonical-api 18080 8080 >/tmp/pf-canonical.log 2>&1 &
+bash scripts/port-forward-loop.sh aggregator 18085 8085 >/tmp/pf-aggregator.log 2>&1 &
+export CANON=http://127.0.0.1:18080
+export AGG=http://127.0.0.1:18085
+export AUDIT_TOKEN="$(kubectl -n $NS get secret bnpb-secrets -o jsonpath='{.data.AUDIT_TOKEN}' | base64 -d)"
 ```
 
-Harapan: **12 shard, 48 placement aktif, health `t|t`**.
+Katalog historis dari asisten tidak disediakan. `scripts/p1-synthetic-load.py`
+memakai jalur tulis kanonik yang sama (BMKG admin replay) sebagai pengganti;
+ganti dengan loader katalog asisten bila datanya tersedia.
+
+**Kriteria 1 — dataset, sharding, dan sebaran per node**
 
 ```bash
-kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/canonical-api 18080:8080
-curl -s 'http://127.0.0.1:18080/v1/events?limit=5' | jq '{items:(.items|length),next_cursor,partial}'
-curl -s 'http://127.0.0.1:18080/v1/events?limit=5&cursor=<next_cursor>' | jq '{items:(.items|length),partial}'
-curl -s 'http://127.0.0.1:18080/internal/audit/events?limit=5' | jq '{items:(.items|length),partial,unavailable_units}'
-curl -s 'http://127.0.0.1:18080/internal/audit/checksum?source=SATELIT' | jq '{count,checksum,partial}'
-# Dashboard P1 (bukan dashboard metrik):
-# http://127.0.0.1:18080/analytics
+# 2.000 event katalog gempa (synthetic)
+python scripts/p1-synthetic-load.py $CANON 2000
+
+# 12 shard events, 48 placement aktif (events + outbox), RF2
+kubectl -n $NS exec citus-coordinator-0 -- psql -U postgres -d canonical -c \
+  "SELECT count(*) FROM pg_dist_shard WHERE logicalrelid='canonical.events'::regclass;"
+kubectl -n $NS exec citus-coordinator-0 -- psql -U postgres -d canonical -c \
+  "SELECT n.nodename, count(*) FROM pg_dist_placement p JOIN pg_dist_node n USING(groupid)
+   WHERE n.isactive AND p.shardstate=1 GROUP BY 1 ORDER BY 1;"
 ```
 
-Dashboard memakai jalur audit yang sama dan menampilkan banner
-`Data belum lengkap` beserta `unavailable_units` saat worker tidak terjangkau.
+Harapan: **12 shard, 48 placement aktif, 12 per node**. Tidak ada node yang
+menyimpan seluruh data; penulisan tersebar karena hash pada identitas.
 
-Node loss (worker dimatikan, satu salinan sementara). Untuk simulasi node
-hilang sesungguhnya, matikan/hentikan VM node-store sehingga local-path di
-node itu ikut hilang; jangan menghapus PVC node lain yang masih hidup.
+**Kriteria 2 — skew dataset dan beban tiap node**
 
 ```bash
-kubectl -n sistem-informasi-kebencanaan-bnpb scale statefulset citus-worker-2 --replicas=0
-kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator-0 -- \
-  psql -h 127.0.0.1 -U postgres -d canonical -c \
+# baseline load per node
+NODES=$(kubectl get nodes -o jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address}{" "}{end}')
+for ip in $NODES; do echo -n "$ip "; ssh ubuntu@$ip 'cut -d" " -f1-3 /proc/loadavg'; done
+
+# lonjakan 1.000 event di satu wilayah + sampling beban
+: > /tmp/p1-load.txt
+( for i in $(seq 1 120); do for ip in $NODES; do
+    echo "$(date +%s) $ip $(ssh -o BatchMode=yes ubuntu@$ip 'cut -d" " -f1 /proc/loadavg')"
+  done; sleep 2; done ) >> /tmp/p1-load.txt & SAMPLER=$!
+REF_PREFIX=synthetic-surge AREA="Sulawesi Tengah" \
+  python scripts/p1-synthetic-load.py $CANON 1000
+kill $SAMPLER
+
+# ringkas min/avg/max per node
+awk '{n[$2]++; s[$2]+=$3; if(mn[$2]==""||$3<mn[$2])mn[$2]=$3; if($3>mx[$2])mx[$2]=$3}
+     END{for(i in n) printf "%s n=%d min=%.2f avg=%.2f max=%.2f\n",i,n[i],mn[i],s[i]/n[i],mx[i]}' /tmp/p1-load.txt
+```
+
+Harapan (demo): 1.000/1.000 sukses; control naik paling tinggi karena
+koordinasi, app/store moderat; distribusi hash tetap merata meskipun seluruh
+lonjakan berada di satu area (12 shard, 1.653–1.764 baris, avg 1.689).
+
+**Kriteria 3 — query lintas lokasi dengan pagination**
+
+```bash
+curl -s "$CANON/v1/events?limit=50" | jq '{items:(.items|length), next_cursor, partial}'
+curl -s "$CANON/v1/events?limit=50&cursor=<next_cursor>" | jq '{items:(.items|length), partial}'
+```
+
+Harapan: 200, urutan naik `(ingested_at, hazard_id)`, `partial=false`, cursor
+berlanjut sampai `next_cursor=null`.
+
+**Kriteria 4 — worker hilang dan datanya hilang: tidak ada event yang hilang**
+
+Hentikan sumber agar checksum stabil, lalu ambil baseline **lewat Aggregator**
+(sesuai kontrak Audit API):
+
+```bash
+kubectl -n $NS scale deploy bmkg pvmbg sensor-pantai satellite-processor --replicas=0
+curl -s -H "Authorization: Bearer $AUDIT_TOKEN" \
+  "$AGG/internal/audit/checksum?source=BMKG" | jq '{count,checksum,partial}'
+```
+
+Matikan worker dan hilangkan datanya (power-off VM `node-store`, atau pindahkan
+direktori local-path worker-2; jangan menyentuh PVC node lain):
+
+```bash
+kubectl -n $NS scale statefulset citus-worker-2 --replicas=0
+kubectl -n $NS exec citus-coordinator-0 -- psql -U postgres -d canonical -c \
   "SELECT citus_disable_node('citus-worker-2',5432,synchronous:=true);
    UPDATE canonical.recovery SET durability='single_copy', fenced_node='citus-worker-2'
    WHERE singleton;"
+
+# selama worker hilang
+curl -s -H "Authorization: Bearer $AUDIT_TOKEN" \
+  "$AGG/internal/audit/checksum?source=BMKG" | jq '{count,checksum,partial}'
+curl -s "$CANON/v1/events?limit=50&source=BMKG" \
+  | jq '{items:(.items|length), partial, unavailable_units}'
 ```
 
-Tulis/read harus tetap berhasil dengan `durability=single_copy`. Setelah worker
-hidup lagi (`kubectl scale statefulset citus-worker-2 --replicas=1`), jalankan
-`citus_activate_node('citus-worker-2',5432)`, set `durability='replicated'`,
-lalu rebalance/verifikasi 48 placement.
-
-Node addition:
+Uji tulis dengan durability eksplisit:
 
 ```bash
-kubectl -n sistem-informasi-kebencanaan-bnpb scale statefulset citus-worker-3 --replicas=1
-# tunggu Ready, lalu jalankan ulang job citus-init
-kubectl -n sistem-informasi-kebencanaan-bnpb delete job citus-init --ignore-not-found
-kubectl apply -f deploy/kubernetes/base/citus-init.yaml
-kubectl -n sistem-informasi-kebencanaan-bnpb wait --for=condition=complete job/citus-init --timeout=300s
+curl -s -X PUT -H 'Content-Type: application/json' \
+  -d '{"version":1,"operation":"upsert","authority":{"partition":"BMKG","epoch":1},
+       "correlation_id":"drill-single-copy","event":{"hazard_type":"SEISMIC",
+       "severity":"WASPADA","area_name":"Drill","latitude":-1,"longitude":120,
+       "occurred_at":"2026-11-20T00:23:00Z","attributes":{"drill":true}}}' \
+  "$CANON/internal/admin/events/BMKG/drill-single-copy" | jq '{durability,version}'
 ```
 
-#### Hasil P1 (yang sudah dibuktikan pada cluster demo)
+Harapan: checksum identik sebelum/selama/sesudah; read 200 dengan
+`partial=false` (replika melayani) atau `partial=true` + `unavailable_units`
+bila unit tidak terjangkau — tidak ada 500 dan tidak menggantung; write
+mengembalikan `durability` `"single_copy"`.
+
+Pulihkan worker:
+
+```bash
+kubectl -n $NS scale statefulset citus-worker-2 --replicas=1
+kubectl -n $NS wait --for=condition=ready pod/citus-worker-2-0 --timeout=300s
+kubectl -n $NS exec citus-coordinator-0 -- psql -U postgres -d canonical -c \
+  "SELECT citus_activate_node('citus-worker-2',5432);
+   UPDATE canonical.recovery SET durability='replicated', fenced_node=NULL WHERE singleton;"
+```
+
+**Kriteria 5 — tambah node**
+
+```bash
+kubectl -n $NS scale statefulset citus-worker-3 --replicas=1
+kubectl -n $NS wait --for=condition=ready pod/citus-worker-3-0 --timeout=300s
+kubectl -n $NS delete job citus-init --ignore-not-found
+kubectl apply -f deploy/kubernetes/base/citus-init.yaml
+kubectl -n $NS wait --for=condition=complete job/citus-init --timeout=420s
+```
+
+`citus-init` hanya mendaftarkan node; ia tidak membuat salinan shard yang
+hilang. Lengkapi salinan dengan prosedur **Replikasi ulang** di bawah sampai
+worker-3 menanggung 12 placement. Harapan: 48 placement aktif, 12 per node,
+read/write tetap berjalan.
+
+**Kriteria 6 — kehilangan node kedua**
+
+Dengan RF2 yang sudah pulih, matikan node kedua (contoh worker-3) dan ulangi
+pemeriksaan checksum/read:
+
+```bash
+kubectl -n $NS scale statefulset citus-worker-3 --replicas=0
+curl -s -H "Authorization: Bearer $AUDIT_TOKEN" \
+  "$AGG/internal/audit/checksum?source=BMKG" | jq '{count,checksum,partial}'
+curl -s "$CANON/v1/events?limit=50&source=BMKG" \
+  | jq '{items:(.items|length), partial}'
+kubectl -n $NS scale statefulset citus-worker-3 --replicas=1
+kubectl -n $NS wait --for=condition=ready pod/citus-worker-3-0 --timeout=300s
+```
+
+Harapan: checksum identik, read 200 (lengkap atau parsial bertanda), dan
+kembali ke 48 placement setelah node hidup.
+
+**Kriteria 7 — dashboard analitik lintas lokasi**
+
+```bash
+# jendela lebar yang mencakup seluruh dataset demo
+FROM=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
+curl -s "$CANON/internal/analytics/summary?from=$FROM" \
+  | jq '{partial, total: ([.series[].points[].count] | add), units: .unavailable_units}'
+curl -s -H "Authorization: Bearer $AUDIT_TOKEN" \
+  "$AGG/internal/audit/checksum" | jq '{count,checksum,partial}'
+# Buka http://127.0.0.1:18080/analytics
+```
+
+Harapan: saat ingestion quiescent, total dashboard **sama dengan** `count` Audit
+API (demo: 19.242 = 19.242, `partial=false`). Saat unit tidak terjangkau,
+respons berisi `partial=true` dan `unavailable_units`, dan halaman menampilkan
+banner `Data belum lengkap` — bukan angka lengkap tanpa penanda.
+
+**Replikasi ulang setelah node hilang (dipakai kriteria 4–6).**
+`citus_rebalance_start()` hanya menyeimbangkan placement yang masih ada; ia
+**tidak** membuat salinan RF2 yang hilang. Cari shard dengan kurang dari 2
+salinan aktif, lalu salin dengan `citus_copy_shard_placement` (menyalin shard
+`canonical.events` ikut menyalin shard `canonical.outbox` yang colocated):
+
+```sql
+SELECT s.shardid,
+       (SELECT count(*) FROM pg_dist_placement p JOIN pg_dist_node n USING(groupid)
+         WHERE p.shardid=s.shardid AND p.shardstate=1 AND n.isactive) AS copies
+FROM pg_dist_shard s
+WHERE s.logicalrelid='canonical.events'::regclass
+ORDER BY 1;
+
+-- contoh: salin satu shard ke node tanpa salinan
+SELECT citus_copy_shard_placement(102018,'citus-worker-1',5432,'citus-coordinator',5432,'auto');
+```
+
+Ulangi untuk setiap shard dengan `copies < 2`, pilih target yang belum memegang
+shard tersebut dan beban placement-nya paling kecil. Verifikasi akhir: 48
+placement aktif, 12 per node, setiap shard 2 salinan aktif.
+
+**Pulihkan ingestion** setelah seluruh pengujian:
+
+```bash
+kubectl -n $NS scale deploy bmkg pvmbg sensor-pantai satellite-processor --replicas=1
+```
+
+#### Hasil P1 yang sudah dibuktikan pada cluster demo
 
 | Kriteria | Bukti |
 |---|---|
-| Multi-node storage | 3 node aktif + worker tambahan untuk uji addition |
-| Sharding | 12 shard `canonical.events`, RF2 |
-| Replikasi | 48 placement aktif |
-| Cross-shard pagination | `/v1/events` cursor halaman 5+5, `partial=false` |
-| Node loss | read tetap jalan, write `201 durability=single_copy` |
-| Node addition | worker-3 ditambahkan dan placement tetap RF2 |
-| Analytics dashboard | `canonical-api:8080/analytics` dengan agregasi hazard/severity/area dan `partial` |
-| Adapter | Aggregator 3/3 Ready; `STORAGE_URL=http://canonical-api:8080` |
+| Katalog + skew | 1.883 event katalog + 1.000 lonjakan satu wilayah; 12 shard 1.653–1.764 baris (avg 1.689) |
+| Beban lonjakan | control avg 5,04 → 7,56; app 2,75 → 2,80; store 4,23 → 5,10 |
+| Cross-shard pagination | `/v1/events` cursor, `partial=false` |
+| Node loss + data hilang | checksum BMKG via Aggregator identik (2.762 event, `partial=false`, 0,4 s), read 200 dalam 0,22 s, write `durability=single_copy` |
+| Node addition | worker-3 menanggung 12 dari 48 placement; read/write tetap jalan |
+| Node loss kedua | checksum tetap identik (2.764 event, `partial=false`, 12,2 s), read 200 dalam 0,7 s |
+| Analytics | total 19.242 = count Audit API; `partial` + banner saat unit hilang |
 
-`canonical-store` hanya Service alias kompatibilitas untuk script lama; tidak
-ada lagi Deployment JSON canonical-store.
-
-### Milestone 2 - Problem 1 (legacy): Interoperabilitas & evolusi skema
-
-```bash
-kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/pvmbg 18082:8082 &
-PVMBG_ADMIN_USERNAME="$(kubectl -n sistem-informasi-kebencanaan-bnpb get secret bnpb-secrets -o jsonpath='{.data.PVMBG_ADMIN_USERNAME}' | base64 -d)"
-PVMBG_ADMIN_PASSWORD="$(kubectl -n sistem-informasi-kebencanaan-bnpb get secret bnpb-secrets -o jsonpath='{.data.PVMBG_ADMIN_PASSWORD}' | base64 -d)"
-PVMBG_TOKEN="$(kubectl -n sistem-informasi-kebencanaan-bnpb get secret bnpb-secrets -o jsonpath='{.data.PVMBG_TOKEN}' | base64 -d)"
-
-curl -s -u "$PVMBG_ADMIN_USERNAME:$PVMBG_ADMIN_PASSWORD" \
-  -X POST http://127.0.0.1:18082/admin/schema-version \
-  -H 'Content-Type: application/json' -d '{"enabled":true}' | jq .
-curl -s -H "Authorization: Bearer $PVMBG_TOKEN" \
-  'http://127.0.0.1:18082/volcanic-reports' \
-  | jq '.reports[0] | {report_id,confidence_level}'
-```
-
-Ulangi dengan `{"enabled":false}` lalu `{"enabled":true}`. Field harus hilang
-dan muncul kembali tanpa restart. Detail ada di Bagian 8.
 
 ### Milestone 2 - Problem 2: Ketahanan Aggregator
 
@@ -1039,7 +1163,7 @@ Kriteria 5 (freeze VM) memakai `VBoxManage controlvm <vm> savestate` lalu
 Komponen:
 
 - `services/coordinator` — lease per sumber, epoch monotonik, CAS checkpoint, dan outbox peringatan kritis.
-- `services/canonical-store` — penyimpanan kanonik sementara sampai A menyediakan PostgreSQL/Citus. Mendukung upsert/retract berversi, fencing epoch otoritas, tombstone, audit checksum/location, dan query cursor.
+- `canonical-api` + Citus — penyimpanan kanonik terdistribusi (events/outbox, RF2, audit checksum/location, query cursor). Hanya adapter ini yang memegang kredensial PostgreSQL.
 - `services/bnpb` — poller BMKG/PVMBG/Sensor dengan leader election, readiness, graceful drain, audit proxy, dan kepemilikan aktif-pasif per sumber.
 - `services/client-api` — titik masuk baca stateless yang dipakai load test.
 
@@ -1976,7 +2100,7 @@ kubectl -n sistem-informasi-kebencanaan-bnpb logs deploy/aggregator --tail=100 \
 **Kriteria 8 — anggaran SLO**
 
 Prometheus tersedia dari Service `prometheus` dan sudah menerima scrape dari
-Aggregator, client-api, auth, canonical-store, coordinator, field-notifier, dan
+Aggregator, client-api, auth, canonical-api, coordinator, field-notifier, dan
 satellite-processor.
 
 ```bash

@@ -50,7 +50,7 @@ This table reserves endpoints; it does not assert the Services already exist.
 | `sensor-pantai` | sensor | Use the supplied sensor's listener/configuration; do not invent its API |
 | `citus-coordinator` | store | TCP 5432 Citus coordinator SQL endpoint |
 | `citus-worker-1`, `citus-worker-2`, `citus-worker-3` | store | TCP 5432 Citus worker PostgreSQL endpoints |
-| `canonical-api` (`canonical-store` alias) | other | TCP 8080 canonical adapter/audit/analytics API |
+| `canonical-api` (Service alias `canonical-store` for legacy scripts) | other | TCP 8080 canonical adapter/audit/analytics API |
 | `otel-collector` | other | TCP 4318 OTLP/HTTP protobuf ingestion |
 | `prometheus`, `grafana`, `tempo`, `loki` | other | TCP 9090, 3000, 3200, 3100 respectively |
 
@@ -80,7 +80,7 @@ Secrets contain no committed real values. Reserve these names and keys:
 | Secret | Keys | Who receives it |
 | --- | --- | --- |
 | `bnpb-audit-auth` | `token` | Aggregator Audit middleware only |
-| `bnpb-canonical-cluster` | `PATRONI_SUPERUSER_PASSWORD`, `CANONICAL_APP_PASSWORD` | Citus StatefulSets and `citus-init` |
+| `bnpb-canonical-cluster` | `PATRONI_SUPERUSER_PASSWORD` (legacy key name; no Patroni deployment), `CANONICAL_APP_PASSWORD` | Citus StatefulSets and `citus-init` |
 | `bnpb-citus-admin` | `CANONICAL_ADMIN_DSN` | `citus-init` schema Job only |
 | `bnpb-citus-api` | `CANONICAL_DSN` | `canonical-api` adapter |
 | `bnpb-bmkg-auth` | `api-key` | BMKG mock and authorized Aggregator poller |

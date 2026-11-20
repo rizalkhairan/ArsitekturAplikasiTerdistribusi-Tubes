@@ -59,7 +59,8 @@ bash scripts/citus-secrets.sh
 The values come from the environment or from the private
 `deploy/k3s/.canonical.env` file. If that file does not exist, export
 `CANONICAL_APP_PASSWORD` and `POSTGRES_PASSWORD` (or
-`PATRONI_SUPERUSER_PASSWORD`) before running the script.
+`PATRONI_SUPERUSER_PASSWORD`, a legacy key name; no Patroni is deployed) before
+running the script.
 
 ## Deploy
 
@@ -87,7 +88,7 @@ citus-worker-1:5432
 citus-worker-2:5432
 citus-worker-3:5432
 canonical-api:8080
-canonical-store:8080   # compatibility alias
+canonical-store:8080   # compatibility alias only; the adapter is canonical-api
 ```
 
 `citus-init` waits for the coordinator and workers, creates the database,
@@ -137,6 +138,26 @@ kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator-0 -- \
    UPDATE canonical.recovery SET durability='replicated', fenced_node=NULL WHERE singleton;"
 ```
 
+`citus_rebalance_start()` only balances placements that still exist; it does
+not recreate the second copy removed by `citus_disable_node`. After the node
+returns, list shards with fewer than 2 active copies and copy each missing
+replica (copying an events shard also copies its colocated outbox shard):
+
+```sql
+SELECT s.shardid,
+       (SELECT count(*) FROM pg_dist_placement p JOIN pg_dist_node n USING(groupid)
+         WHERE p.shardid=s.shardid AND p.shardstate=1 AND n.isactive) AS copies
+FROM pg_dist_shard s
+WHERE s.logicalrelid='canonical.events'::regclass
+ORDER BY 1;
+
+-- example: copy one shard to a node that has no copy
+SELECT citus_copy_shard_placement(102018,'citus-worker-1',5432,'citus-coordinator',5432,'auto');
+```
+
+Repeat for every shard with `copies < 2`, choosing a target without a copy.
+Verify 48 active placements, 12 per node, and 2 active copies per shard.
+
 Add a fourth worker:
 
 ```bash
@@ -149,7 +170,9 @@ kubectl -n sistem-informasi-kebencanaan-bnpb wait \
   --for=condition=complete job/citus-init --timeout=300s
 ```
 
-Then rebalance/verify the placement count and keep replication factor 2.
+`citus-init` only registers the node; it does not add copies for existing
+shards. Use the copy procedure above until worker-3 carries 12 placements, then
+verify 48 active placements and 2 active copies per shard.
 
 ## Observability
 

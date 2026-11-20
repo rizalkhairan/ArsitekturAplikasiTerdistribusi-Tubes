@@ -95,7 +95,8 @@ kubectl -n sistem-informasi-kebencanaan-bnpb wait \
 ```
 
 Service DNS is fixed: `citus-coordinator`, `citus-worker-1`,
-`citus-worker-2`, `citus-worker-3`, `canonical-api` and `canonical-store`.
+`citus-worker-2`, `citus-worker-3`, `canonical-api`, and the
+`canonical-store` compatibility alias for legacy scripts.
 `citus-worker-3` starts at zero replicas and is scaled for node-addition drills.
 P1 analytics are served by `canonical-api:8080/analytics`; the page uses the
 Audit cursor path and carries a `partial` marker. Grafana remains metrics,
