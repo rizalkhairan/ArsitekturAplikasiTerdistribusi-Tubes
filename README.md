@@ -26,8 +26,9 @@ tetap tersedia untuk pengembangan lokal, tetapi bukan topologi demo.
 | `node-app` | VM VirtualBox | worker + Citus worker + aplikasi | 4 | 8 GiB |
 | `node-store` | VM VirtualBox | worker + Citus worker + observability | 4 | 8 GiB |
 
-Host fisik demo: mesin Windows dengan **8 vCPU** dan **32 GiB RAM**; node
-berjalan sebagai tiga VM VirtualBox dengan kernel Linux terpisah. Ganti nama
+Host fisik demo: laptop Windows dengan Intel Core Ultra 7 155H (**16 core /
+22 logical CPU**) dan **31,4 GiB RAM**; node berjalan sebagai tiga VM VirtualBox
+(12 vCPU total, tidak oversubscribed) dengan kernel Linux terpisah. Ganti nama
 node pada perintah di bawah sesuai `kubectl get nodes`.
 
 Setelah image di-import ke ketiga node (lihat bagian image), deployment utama

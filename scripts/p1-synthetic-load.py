@@ -43,7 +43,10 @@ def put(index):
         },
     }
     request = urllib.request.Request(
-        f"{BASE}/internal/canonical/events/BMKG/{ref}",
+        # The historical catalog is BMKG/earthquake data. BMKG writes are
+        # fenced, so the synthetic loader uses the admin replay route, which
+        # is the same path used for DLQ recovery.
+        f"{BASE}/internal/admin/events/BMKG/{ref}",
         data=json.dumps(body).encode(),
         method="PUT",
         headers={"Content-Type": "application/json"},

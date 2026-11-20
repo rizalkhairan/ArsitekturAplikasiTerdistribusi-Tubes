@@ -10,15 +10,20 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 )
 
 const (
-	readTimeout  = 60 * time.Second
-	unitTimeout  = 8 * time.Second
-	readWorkers  = 16
-	maxReadBytes = 16 << 20
-	snapshotTTL  = 300 * time.Second
+	readTimeout = 60 * time.Second
+	// A cross-shard traversal must answer within the request budget even when
+	// a placement is gone: bound the whole traversal, give the single-query
+	// fast path a short deadline, and let each shard spend enough time for
+	// canonical.read_shard to fall through to its replica placement.
+	gatherTimeout   = 12 * time.Second
+	fastPathTimeout = 5 * time.Second
+	unitTimeout     = 4 * time.Second
+	readWorkers     = 16
+	maxReadBytes    = 16 << 20
+	snapshotTTL     = 300 * time.Second
 )
 
 type Query struct {
@@ -84,16 +89,20 @@ func (q *Query) validate() error {
 // gather either accounts for the entire logical hash space or fails. A unit
 // that cannot be read completely contributes no records, including tombstones.
 func gather(ctx context.Context, reader shardReader, q Query) ([]Event, []string, error) {
-	ctx, cancel := context.WithTimeout(ctx, readTimeout)
+	ctx, cancel := context.WithTimeout(ctx, gatherTimeout)
 	defer cancel()
 	// Fast path: one distributed query. Citus fails the whole query when a
-	// placement is unreachable, so success means every shard answered.
-	if rows, fastErr := reader.readAll(ctx, q); fastErr == nil {
+	// placement is unreachable, so success means every shard answered. Bound
+	// it so an unreachable placement cannot consume the whole traversal budget
+	// before the per-shard fallback gets to answer with a partial marker.
+	fastCtx, fastCancel := context.WithTimeout(ctx, fastPathTimeout)
+	rows, fastErr := reader.readAll(fastCtx, q)
+	fastCancel()
+	if fastErr == nil {
 		events, mergeErr := mergeRows(rows)
 		return events, nil, mergeErr
-	} else {
-		log.Printf("canonical distributed read unavailable (%v); falling back to per-shard traversal", fastErr)
 	}
+	log.Printf("canonical distributed read unavailable (%v); falling back to per-shard traversal", fastErr)
 	units, err := reader.inventory(ctx)
 	if err != nil {
 		log.Printf("canonical inventory before traversal: %v", err)
@@ -311,17 +320,19 @@ func afterCursor(event Event, pos *cursorPos) bool {
 // gatherPage returns at most q.Limit+1 events after pos. The extra row tells
 // the caller whether another page exists.
 func gatherPage(ctx context.Context, reader shardReader, q Query, pos *cursorPos) ([]Event, []string, error) {
-	ctx, cancel := context.WithTimeout(ctx, readTimeout)
+	ctx, cancel := context.WithTimeout(ctx, gatherTimeout)
 	defer cancel()
-	if rows, fastErr := reader.readAllPage(ctx, q, pos, q.Limit+1); fastErr == nil {
+	fastCtx, fastCancel := context.WithTimeout(ctx, fastPathTimeout)
+	rows, fastErr := reader.readAllPage(fastCtx, q, pos, q.Limit+1)
+	fastCancel()
+	if fastErr == nil {
 		events, mergeErr := mergeRows(rows)
 		if mergeErr != nil {
 			return nil, nil, mergeErr
 		}
 		return selectEvents(events, q), nil, nil
-	} else {
-		log.Printf("canonical distributed read unavailable (%v); falling back to per-shard traversal", fastErr)
 	}
+	log.Printf("canonical distributed read unavailable (%v); falling back to per-shard traversal", fastErr)
 	events, missing, err := gather(ctx, reader, q)
 	if err != nil {
 		return nil, nil, err
