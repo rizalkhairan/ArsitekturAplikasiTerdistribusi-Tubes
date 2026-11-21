@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"sort"
 	"time"
@@ -34,15 +35,19 @@ type analyticsResponse struct {
 	Areas            []analyticsCount  `json:"areas"`
 }
 
+type seriesBuilder struct {
+	Points map[string]int
+}
+
 func (s *server) analyticsPage(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(analyticsHTML))
 }
 
-// analyticsSummary reads through the same Citus cursor path as the Audit API,
-// then aggregates in the process that owns canonical storage. This keeps
-// dashboard numbers aligned with /internal/audit/events and preserves the
-// partial marker when a worker is unreachable.
+// analyticsSummary prefers one Citus aggregate so the dashboard does not
+// transfer every event to this process. If the aggregate cannot run (for
+// example, a placement is unreachable), the cursor traversal below preserves
+// the partial marker and unavailable-unit list.
 func (s *server) analyticsSummary(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	from := now.Add(-24 * time.Hour)
@@ -71,6 +76,51 @@ func (s *server) analyticsSummary(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	source := r.URL.Query().Get("source")
+
+	response, err := s.analyticsAggregate(ctx, source, from, to)
+	if err == nil {
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+	log.Printf("analytics aggregate unavailable (%v); falling back to cursor traversal", err)
+	response, err = s.analyticsCursor(ctx, source, from, to)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *server) analyticsAggregate(ctx context.Context, source string, from, to time.Time) (analyticsResponse, error) {
+	rows, err := s.store.Analytics(ctx, source, from, to)
+	if err != nil {
+		return analyticsResponse{}, err
+	}
+	seriesMap := map[string]*seriesBuilder{}
+	severityMap := map[string]int{}
+	areaMap := map[string]int{}
+	for _, row := range rows {
+		builder := seriesMap[row.HazardType]
+		if builder == nil {
+			builder = &seriesBuilder{Points: map[string]int{}}
+			seriesMap[row.HazardType] = builder
+		}
+		builder.Points[row.Bucket] += row.Count
+		severityMap[row.Severity] += row.Count
+		areaMap[row.AreaName] += row.Count
+	}
+	return analyticsResponse{
+		From:             from.Format(time.RFC3339),
+		To:               to.Format(time.RFC3339),
+		Partial:          false,
+		UnavailableUnits: []string{},
+		Series:           buildSeries(seriesMap),
+		Severity:         sortedCounts(severityMap),
+		Areas:            sortedCounts(areaMap),
+	}, nil
+}
+
+func (s *server) analyticsCursor(ctx context.Context, source string, from, to time.Time) (analyticsResponse, error) {
 	events := []canonical.Event{}
 	units := []string{}
 	seenUnits := map[string]bool{}
@@ -81,8 +131,7 @@ func (s *server) analyticsSummary(w http.ResponseWriter, r *http.Request) {
 			Source: source, Since: from.Format(time.RFC3339Nano), Limit: 1000, Cursor: cursor,
 		})
 		if err != nil {
-			writeError(w, err)
-			return
+			return analyticsResponse{}, err
 		}
 		for _, event := range page.Items {
 			if event.IngestedAt.After(to) {
@@ -105,9 +154,6 @@ func (s *server) analyticsSummary(w http.ResponseWriter, r *http.Request) {
 		cursor = *page.NextCursor
 	}
 
-	type seriesBuilder struct {
-		Points map[string]int
-	}
 	seriesMap := map[string]*seriesBuilder{}
 	severityMap := map[string]int{}
 	areaMap := map[string]int{}
@@ -122,7 +168,19 @@ func (s *server) analyticsSummary(w http.ResponseWriter, r *http.Request) {
 		severityMap[event.Severity]++
 		areaMap[event.AreaName]++
 	}
+	sort.Strings(units)
+	return analyticsResponse{
+		From:             from.Format(time.RFC3339),
+		To:               to.Format(time.RFC3339),
+		Partial:          partial,
+		UnavailableUnits: units,
+		Series:           buildSeries(seriesMap),
+		Severity:         sortedCounts(severityMap),
+		Areas:            sortedCounts(areaMap),
+	}, nil
+}
 
+func buildSeries(seriesMap map[string]*seriesBuilder) []analyticsSeries {
 	series := make([]analyticsSeries, 0, len(seriesMap))
 	for hazard, builder := range seriesMap {
 		points := make([]analyticsPoint, 0, len(builder.Points))
@@ -133,17 +191,7 @@ func (s *server) analyticsSummary(w http.ResponseWriter, r *http.Request) {
 		series = append(series, analyticsSeries{HazardType: hazard, Points: points})
 	}
 	sort.Slice(series, func(i, j int) bool { return series[i].HazardType < series[j].HazardType })
-	sort.Strings(units)
-
-	writeJSON(w, http.StatusOK, analyticsResponse{
-		From:             from.Format(time.RFC3339),
-		To:               to.Format(time.RFC3339),
-		Partial:          partial,
-		UnavailableUnits: units,
-		Series:           series,
-		Severity:         sortedCounts(severityMap),
-		Areas:            sortedCounts(areaMap),
-	})
+	return series
 }
 
 func sortedCounts(values map[string]int) []analyticsCount {
