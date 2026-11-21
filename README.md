@@ -2105,38 +2105,104 @@ kubectl -n sistem-informasi-kebencanaan-bnpb scale deployment/sensor-pantai --re
 
 **Kriteria 5 — Tim Lapangan dilayani, Media ditolak terkontrol**
 
+Kriteria ini tidak membutuhkan 8.000 VU. Gunakan 500 + 500 VU; sebelum load,
+tempatkan sementara `client-api` dan `aggregator` hanya di worker agar load tidak
+mematikan etcd di `node-control`:
+
 ```bash
-k6 run -e BASE_URL="$BASE_URL" -e FIELD_VUS=500 -e MEDIA_VUS=500 loadtest/k6/priority.js
-kubectl -n sistem-informasi-kebencanaan-bnpb port-forward svc/client-api 19080:8080 &
+NS=sistem-informasi-kebencanaan-bnpb
+
+for d in client-api aggregator; do
+  kubectl -n "$NS" patch deployment "$d" --type=strategic -p '{
+    "spec":{"template":{"spec":{"affinity":{"nodeAffinity":{
+      "requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[
+        {"matchExpressions":[{"key":"bnpb.io/app-eligible","operator":"In","values":["true"]}]}
+      ]}
+    }}}}}
+  }'
+done
+
+kubectl -n "$NS" rollout status deployment/client-api --timeout=240s
+kubectl -n "$NS" rollout status deployment/aggregator --timeout=240s
+kubectl -n "$NS" get pods -o wide | grep -E 'client-api|aggregator'
+
+# Base URL: NodePort client-api (atau gunakan port-forward 9080)
+BASE_URL=http://192.168.56.11:30081
+
+k6 run \
+  -e BASE_URL="$BASE_URL" \
+  -e FIELD_VUS=500 -e MEDIA_VUS=500 -e DURATION=60s \
+  loadtest/k6/priority.js
+
+# admission metrics
+kubectl -n "$NS" port-forward svc/client-api 19080:8080 >/tmp/pf-admission.log 2>&1 &
+sleep 2
 curl -s http://127.0.0.1:19080/metrics | grep admission_rejected_total
 ```
 
-Expected: permintaan Tim Lapangan tetap berhasil; Media menerima `429`
-terkontrol dengan `Retry-After`, tercatat pada `role="media"`.
+Expected: `field_served > 0`, `media_controlled_rejections > 0`,
+`field_error_rate` rendah (di bawah ambang script), k6 exit 0, dan metrik
+`admission_rejected_total{role="media"}` bertambah.
 
-**Kriteria 6 — kombinasi kegagalan pulih sendiri**
+Setelah selesai, kembalikan penempatan normal:
 
-Daftar practice yang benar dari Tester Agent adalah:
+```bash
+for d in client-api aggregator; do
+  kubectl -n "$NS" patch deployment "$d" --type=json \
+    -p='[{"op":"remove","path":"/spec/template/spec/affinity/nodeAffinity"}]'
+done
+```
+
+**Kriteria 6 — kombinasi kegagalan pulih sendiri (game day)**
+
+Uji ini mensimulasikan **kombinasi kegagalan yang tidak diumumkan**. Selama
+window pemulihan tidak boleh ada intervensi manual: sistem harus pulih sendiri.
+Kombinasi dapat mencakup node mati, komponen storage mati, gangguan jaringan,
+PVMBG outage, lonjakan beban, dan/atau profil Sensor Pantai ujian.
+
+Persiapan dan daftar practice:
 
 ```bash
 kubectl -n tester-agent exec daemonset/tester-agent -- /app list
+./scripts/gameday.sh                 # daftar tanpa menjalankan skenario
 ```
 
-Gunakan nama yang benar, misalnya:
+Jalankan kombinasi non-destruktif (contoh yang sudah terbukti):
 
 ```bash
-./scripts/gameday.sh
-./scripts/gameday.sh kill-leader
-./scripts/gameday.sh kill-leader wipe-node
+./scripts/gameday.sh kill-leader kill-store
 ```
 
-`wipe-node` bersifat destruktif dan hanya boleh dijalankan pada cluster VM.
-`partition` dan `clock-skew` tidak berjalan baik di kind. Example for a real VM
-clock/partition run is under P2 criteria 4/5.
+`kill-leader` menghentikan pod Aggregator pemimpin; `kill-store` menghentikan
+pod storage/Citus worker. Keduanya harus pulih tanpa intervensi manual.
 
-Expected: takeover lease, probe breaker, fallback cursor, retry outbox, dan
-pemulihan cache basi terjadi tanpa intervensi manual. Tidak ada `kill-pod` atau
-`kill-node` di daftar practice Tester Agent.
+Skenario tambahan hanya pada cluster VM:
+
+```bash
+./scripts/gameday.sh partition
+./scripts/gameday.sh kill-leader partition
+```
+
+`wipe-node` adalah skenario **destruktif** dari Tester Agent dan hanya boleh
+dijalankan pada cluster VM dengan rencana rebuild node; jangan dijalankan tanpa
+persiapan.
+
+Bukti pemulihan yang harus diperiksa setelah window:
+
+```bash
+kubectl get nodes
+kubectl -n sistem-informasi-kebencanaan-bnpb get pods -o wide
+kubectl -n sistem-informasi-kebencanaan-bnpb exec citus-coordinator-0 -- \
+  psql -U postgres -d canonical -tAc \
+  "select count(*) from pg_dist_placement p join pg_dist_node n using(groupid) where n.isactive and p.shardstate=1;"
+kubectl -n tester-agent logs -l app=tester-agent --tail=200
+./loadtest/duplicate-detector.sh
+```
+
+Expected: Tester Agent mencatat `pemulihan akhir selesai; keadaan bersih`;
+semua node Ready; Aggregator 3/3; Citus placement aktif 48 (12 per node);
+lease baru dipegang instance sehat; breaker sensor pulih/terbuka sesuai kondisi;
+tidak ada duplikat; dan tidak ada intervensi manual selama pemulihan.
 
 **Kriteria 7 — dashboard, metrik, dan jejak permintaan**
 
