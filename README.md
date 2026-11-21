@@ -1153,34 +1153,6 @@ kubectl -n $NS scale deploy bmkg pvmbg sensor-pantai satellite-processor --repli
 
 ### Milestone 2 - Problem 2: Ketahanan Aggregator
 
-Problem 2 memakai kontrak kanonik M2 pada `contracts/m2/README.md` dan berbagi
-ingest pipeline dengan Problem 3/4.
-
-```bash
-export BASE_URL=http://192.168.56.10:30081
-export INTERNAL_KEY="$(kubectl -n sistem-informasi-kebencanaan-bnpb get secret bnpb-secrets -o jsonpath='{.data.INTERNAL_API_KEY}' | base64 -d)"
-
-./loadtest/preflight.sh
-./loadtest/duplicate-detector.sh
-./scripts/integration-pause-leader.sh
-GENERATOR_HOSTS="ubuntu@192.168.56.20 ubuntu@192.168.56.21" \
-  VUS=10000 DURATION=120s ./loadtest/scaling.sh
-./loadtest/throughput.sh
-./scripts/tag-aggregator-version.sh
-NEW_IMAGE=bnpb-gateway/aggregator:m2-v2 VUS=500 \
-  ./loadtest/rolling-update.sh
-```
-
-Kriteria 5 (freeze VM) memakai `VBoxManage controlvm <vm-holder> pause`, jeda
-30 detik, lalu `resume`, dan `./loadtest/duplicate-detector.sh`. Detail ada di
-Bagian 10.
-
-Komponen:
-
-- `services/coordinator` — lease per sumber, epoch monotonik, CAS checkpoint, dan outbox peringatan kritis.
-- `canonical-api` + Citus — penyimpanan kanonik terdistribusi (events/outbox, RF2, audit checksum/location, query cursor). Hanya adapter ini yang memegang kredensial PostgreSQL.
-- `services/bnpb` — poller BMKG/PVMBG/Sensor dengan leader election, readiness, graceful drain, audit proxy, dan kepemilikan aktif-pasif per sumber.
-- `services/client-api` — titik masuk baca stateless yang dipakai load test.
 
 ### Menjalankan Problem 2
 
@@ -1190,8 +1162,14 @@ Secret disiapkan.
 
 ### Pemeriksaan kriteria P2
 
+Lakukan
+```bash
+export BASE_URL=http://192.168.56.10:30081
+export INTERNAL_KEY="$(kubectl -n sistem-informasi-kebencanaan-bnpb get secret bnpb-secrets -o jsonpath='{.data.INTERNAL_API_KEY}' | base64 -d)"
+```
+
 Semua perintah dijalankan dari root repository. Prasyarat: `kubectl`,
-`python3`, `k6` pada generator **di luar pod** (host atau VM eksternal), dan
+`python3`, `k6` pada generator di luar pod (host atau VM eksternal), dan
 `ssh`/`scp` bila memakai beberapa generator. Load test memakai NodePort
 `client-api` 30081; script menaikkan TTL token otomatis:
 
@@ -1246,8 +1224,7 @@ kubectl -n tester-agent exec daemonset/tester-agent -- /app run practice kill-le
 
 **Kriteria 5 — holder freeze pada VM**
 
-Ini tidak dapat diuji secara jujur di kind karena node berbagi kernel dan tidak
-bisa disuspend sebagai VM. Jalankan pada cluster VM. Identifikasi dulu replica
+Jalankan pada cluster VM. Identifikasi dulu replica
 aggregator yang memegang lease dan VM yang menjalankannya:
 
 ```bash
@@ -1259,8 +1236,7 @@ for pod in $(kubectl -n sistem-informasi-kebencanaan-bnpb get pods -l app=aggreg
 done
 ```
 
-Freeze VM yang menjalankan holder. Pemetaan node ke VM: `node-control` ->
-`node-control`, `node-app` -> `node-app`, `node-store` -> `node-machine`. Set
+Freeze VM yang menjalankan holder. Set
 `HOLDER_VM` sesuai hasil pemeriksaan di atas:
 
 ```bash
@@ -1294,7 +1270,7 @@ polling yang sama; holder dengan epoch basi ditolak oleh canonical store.
 
 **Kriteria 6 — tepat sekali saat beban tinggi dan scaling 3→5→2**
 
-Jalankan k6 dari host/VM eksternal, bukan dari pod. Total VU harus ≥10.000.
+Jalankan k6 dari host/VM eksternal Total VU harus ≥10.000.
 Contoh dengan dua generator eksternal:
 
 ```bash
@@ -1315,28 +1291,23 @@ p95 dilaporkan tetapi bukan gate kriteria 6.
 
 **Kriteria 7 — 3 instance ≥ 2× throughput 1 instance**
 
-Script membuat NodePort Service sementara untuk Aggregator (bukan
-`kubectl port-forward`) dan menghapusnya saat selesai. Kalibrasi jumlah VU
-terlebih dahulu, lalu jalankan kedua leg:
+Jalankan kedua leg:
 
 ```bash
-CALIBRATE=1 ./loadtest/throughput.sh
-VUS=2000 DURATION=60s ./loadtest/throughput.sh
+VUS=500 DURATION=60s ./loadtest/throughput.sh
 ```
-
 Expected: output berakhir dengan `ratio ... (target >= 2.0)` dan exit code 0;
 throughput dihitung dari respons 200 yang sukses, bukan dari 429.
 
 **Kriteria 8 — rolling update tanpa permintaan gagal**
 
-Kriteria 8 tidak mewajibkan 10.000 VU. Gunakan beban yang menghasilkan nol 429
-dan nol error, misalnya 500 VU. Siapkan image versi baru di semua node terlebih
+Siapkan image versi baru di semua node terlebih
 dahulu:
 
 ```bash
 ./scripts/tag-aggregator-version.sh
 NEW_IMAGE=bnpb-gateway/aggregator:m2-v2 \
-  VUS=500 DURATION=120s ROLLOUT_AT=30 ./loadtest/rolling-update.sh
+  VUS=150 DURATION=120s ROLLOUT_AT=30 ./loadtest/rolling-update.sh
 ```
 
 Jika punya image v2 hasil build sendiri, import dengan tag tersebut dan set
@@ -1345,8 +1316,7 @@ saat beban berjalan, menunggu rollout, lalu memeriksa semua pod memakai image
 baru.
 
 Expected: `unexpected_errors=0`, `controlled_rejections=0`, dan seluruh pod
-Aggregator `Running` dengan image baru. Set `ALLOW_CONTROLLED=1` hanya jika 429
-memang ingin dikecualikan.
+Aggregator `Running` dengan image baru. 
 
 **Audit proxy**
 

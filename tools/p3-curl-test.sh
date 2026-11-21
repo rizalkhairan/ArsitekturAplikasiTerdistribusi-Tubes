@@ -54,6 +54,7 @@ curl_status() {
   fi
 }
 
+echo 'Compatibility declaration: additive optional fields are accepted and retained in attributes; rename/type_change/missing_required are parked as schema_incompatible until the mapper is updated and Ops replays them.'
 echo 'P3.1 — health and access control'
 curl_status 200 "$tmp/health" "$INGEST_URL/health"
 curl_status 401 "$tmp/no-auth" "$INGEST_URL/internal/audit/unprocessed?source=PVMBG&limit=1"
@@ -199,11 +200,13 @@ for mode in rename type_change missing_required; do
   if [[ -z "$canonical_ref" ]]; then
     canonical_ref="pvmbg-v2-$(printf '%s' "$report_raw" | base64 -d | sha256sum | awk '{print $1}')"
   fi
-  curl_status 200 "$tmp/replayed-hazards" -H "X-Internal-Key: ${INTERNAL_API_KEY:-local-dev-internal-key}" \
-    "$BNPB_URL/hazards?source=PVMBG&limit=1000"
-  jq -e --arg id "$canonical_ref" '[.[] | select(.source_ref_id == $id)] | length == 1' \
-    "$tmp/replayed-hazards" >/dev/null \
-    || fail "PVMBG $mode replay did not produce exactly one canonical event"
+  replayed_visible() {
+    curl -fsS -H "X-Internal-Key: ${INTERNAL_API_KEY:-local-dev-internal-key}" \
+      "$BNPB_URL/hazards?source=PVMBG&limit=1000" >"$tmp/replayed-hazards" || return 1
+    jq -e --arg id "$canonical_ref" '[.[] | select(.source_ref_id == $id)] | length == 1' \
+      "$tmp/replayed-hazards" >/dev/null
+  }
+  wait_for "PVMBG $mode replay to become visible in canonical storage" replayed_visible
   pass "$mode incompatibility was quarantined, inspectable by Ops, and replayed"
   sleep 11 # wait for a fresh PVMBG report before testing the next incompatible mode
 done
@@ -237,10 +240,12 @@ curl_status 200 "$tmp/order-first" -X POST "$INGEST_URL/internal/ops/reprocess" 
 curl_status 200 "$tmp/order-second" -X POST "$INGEST_URL/internal/ops/reprocess" \
   -H "Authorization: Bearer $OPS_TOKEN" -H 'Content-Type: application/json' \
   -d "{\"message_id\":\"$order_late\"}"
-curl_status 200 "$tmp/order-hazards" -H "X-Internal-Key: ${INTERNAL_API_KEY:-local-dev-internal-key}" \
-  "$BNPB_URL/hazards?source=PVMBG&limit=1000"
-jq -e --arg id "$order_ref" '[.[] | select(.source_ref_id == $id)] | length == 1' "$tmp/order-hazards" >/dev/null \
-  || fail 'ordered replay created a duplicate canonical row for the same source_ref_id'
+order_visible() {
+  curl -fsS -H "X-Internal-Key: ${INTERNAL_API_KEY:-local-dev-internal-key}" \
+    "$BNPB_URL/hazards?source=PVMBG&limit=1000" >"$tmp/order-hazards" || return 1
+  jq -e --arg id "$order_ref" '[.[] | select(.source_ref_id == $id)] | length == 1' "$tmp/order-hazards" >/dev/null
+}
+wait_for 'ordered replay to become visible in canonical storage' order_visible
 for order_id in "$order_early" "$order_late"; do
   curl_status 200 "$tmp/order-recovered" -H "Authorization: Bearer $OPS_TOKEN" \
     "$INGEST_URL/internal/ops/messages/$order_id"
