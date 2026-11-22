@@ -2050,7 +2050,7 @@ Demonstrasi lokal Kriteria 1 di Docker Compose:
 ```bash
 ./tools/p5-1-test.sh
 # run deterministik dengan volume compose baru:
-RESET=1 ./tools/p5-1-mock-test.sh
+RESET=1 ./tools/p5-1-test.sh
 ```
 
 ### Overlay ujian
