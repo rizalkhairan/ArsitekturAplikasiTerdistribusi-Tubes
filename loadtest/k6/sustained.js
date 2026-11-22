@@ -13,6 +13,9 @@ const BASE = __ENV.BASE_URL || 'http://client-api:8080';
 const USER = __ENV.K6_USER || 'field-user';
 const PASS = __ENV.K6_PASSWORD || 'field-pass-2026';
 const INTERNAL_KEY = __ENV.INTERNAL_KEY || '';
+// TOKEN lets the orchestrator log in once and share the JWT with every
+// generator, so setup() does not compete with the load for the auth path.
+const TOKEN = __ENV.TOKEN || '';
 
 const controlled = new Counter('controlled_rejections');
 const successful = new Counter('successful_responses');
@@ -46,6 +49,9 @@ export const options = {
 };
 
 export function setup() {
+  if (TOKEN) {
+    return { token: TOKEN };
+  }
   if (INTERNAL_KEY) {
     return { token: '' };
   }

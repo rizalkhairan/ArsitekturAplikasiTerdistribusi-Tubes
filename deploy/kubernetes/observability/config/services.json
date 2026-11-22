@@ -40,7 +40,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (service) (rate(bnpb_http_requests_total[5m]))",
+          "expr": "sum by (service) (rate(http_requests_total[5m]))",
           "legendFormat": "{{service}}"
         }
       ],
@@ -67,7 +67,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(sum by (service) (rate(bnpb_http_requests_total{status_code=~\"5..\"}[5m])) or on (service) (0 * sum by (service) (rate(bnpb_http_requests_total[5m])))) / clamp_min(sum by (service) (rate(bnpb_http_requests_total[5m])), 0.000001)",
+          "expr": "(sum by (service) (rate(http_requests_total{status=~\"5..\"}[5m])) or on (service) (0 * sum by (service) (rate(http_requests_total[5m])))) / clamp_min(sum by (service) (rate(http_requests_total[5m])), 0.000001)",
           "legendFormat": "{{service}}"
         }
       ],
@@ -94,7 +94,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (service, le) (rate(bnpb_http_request_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (service, le) (rate(http_request_duration_seconds_bucket[5m])))",
           "legendFormat": "{{service}}"
         }
       ],
@@ -121,7 +121,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "up{job=\"application\"}",
+          "expr": "up",
           "legendFormat": "{{service}}"
         }
       ],

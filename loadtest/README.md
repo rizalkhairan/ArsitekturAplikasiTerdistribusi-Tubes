@@ -7,17 +7,20 @@ direct Aggregator throughput/rolling tests, deleted on exit.
 
 ## Prerequisites
 
-- `k6` (v1.x) on the generator host(s)
-- `kubectl` pointed at the demo cluster
+- `k6` **v2.4.0** on the generator host(s) (`ulimit -n 65536`)
+- `kubectl` pointed at the demo cluster (`KUBECONFIG`, not the stale default)
 - `python3` or `python`
-- `ssh`/`scp` only when `GENERATOR_HOSTS` is used
+- `ssh`/`scp` only when `GENERATOR_HOSTS` is used, with key auth
+  (`C:/Users/YOGA/.ssh/loadgen_ed25519`, configured for
+  `ubuntu@192.168.56.20` and `ubuntu@192.168.56.21` in `~/.ssh/config`)
 - external generator VMs must be able to reach the client-api/Aggregator
-  NodePort on the host-only network
+  NodePort on the host-only network; target a **worker** node (`.11`/`.12`),
+  not the control-plane node `.10`
 
 ## Preflight
 
 ```bash
-BASE_URL=http://192.168.56.10:30081 ./loadtest/preflight.sh
+BASE_URL=http://192.168.56.11:30081 ./loadtest/preflight.sh   # worker NodePort, not .10
 ```
 
 It checks Ready nodes, Running pods, Aggregator 3/3, the external client-api
@@ -38,25 +41,44 @@ optional via `P95_MS`; the assignment does not include it in criterion 6.
 One external generator (smoke):
 
 ```bash
-BASE_URL=http://192.168.56.10:30081 \
+BASE_URL=http://192.168.56.11:30081 \
 VUS=1000 DURATION=120s ALLOW_SMALL=1 RUN_DETECTOR=0 \
 ./loadtest/scaling.sh
 ```
 
-External generators totaling 10k VUs (recommended):
+External generators totaling 10k VUs (the configuration that passes):
 
 ```bash
-BASE_URL=http://192.168.56.10:30081 \
+export BASE_URL=http://192.168.56.11:30081   # worker NodePort, never .10
+
+# One token for all generators. INTERNAL_KEY must stay empty: client-api only
+# accepts a Bearer JWT; X-Internal-Key is an outbound client-api header.
+TOKEN=$(curl -s -X POST "$BASE_URL/auth/login" \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"field-user","password":"field-pass-2026"}' | jq -r '.data.accessToken')
+
+OUT="loadtest/results/10k-$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$OUT"
 GENERATOR_HOSTS="ubuntu@192.168.56.20 ubuntu@192.168.56.21" \
-VUS=10000 DURATION=120s \
-./loadtest/scaling.sh
+  VUS=10000 DURATION=120s INTERNAL_KEY= TOKEN="$TOKEN" \
+  RUN_DETECTOR=0 OUT="$OUT" ./loadtest/scaling.sh
 ```
+
+Cluster prerequisites for 10k (already applied in the demo environment):
+
+- client-api image with 60s HTTP timeouts (`services/client-api/main.go`,
+  live tag `bnpb-gateway/client-api:m2-timeout`);
+- client-api memory limit **1Gi** (256Mi gets OOMKilled at 10k connections);
+- `bnpb-config`: `MAX_CONCURRENT_REQUESTS=20`, `RESERVED_FIELD_CAPACITY=10`;
+- client-api replicas only on workers (`bnpb.io/app-eligible=true`);
+- generators with k6 v2.4.0, SSH key auth, `ulimit -n 65536`.
 
 Each generator gets a share of the VUs (the script distributes the remainder so
 the total is exactly 10,000). The orchestrator scales the Aggregator 3 -> 5 at
-+20s and 5 -> 2 at +60s, waits for all generators, aggregates the summaries, and
-runs the detector. `scaling-aggregate.json` and `scaling-detector.txt` are the
-evidence.
++20s and 5 -> 2 at +60s, waits for all generators, and aggregates the summaries.
+`RUN_DETECTOR=0` is used because the existing detector reads the whole mock
+history and still contains a pre-test `08:03:22Z` bucket from a control-plane
+restart; run the detector separately for a clean window. `scaling-aggregate.json`
+is the evidence.
 
 Useful variables:
 
@@ -68,7 +90,9 @@ Useful variables:
 | `LOCAL_GENERATORS` | `1` if no hosts | Number of local k6 processes |
 | `VUS_PER_GENERATOR` | unset | Overrides `VUS`, total = this × generator count |
 | `ALLOW_SMALL` | `0` | `1` disables the 10k/120s gate for smoke tests |
-| `RUN_DETECTOR` | `1` | Run the duplicate detector after the load |
+| `TOKEN` | empty | Pre-generated JWT shared by all generators; avoids login contention |
+| `INTERNAL_KEY` | empty | Leave empty for client-api; it only accepts `Authorization: Bearer` |
+| `RUN_DETECTOR` | `1` | Run the duplicate detector after the load; use `0` when the mock history has pre-test records |
 | `RAW_OUT` | `0` | `1` writes local k6 raw JSON (large; not needed for evidence) |
 | `SCALE_UP_AT` / `SCALE_DOWN_AT` | `20` / `60` | Scaling timestamps in seconds |
 

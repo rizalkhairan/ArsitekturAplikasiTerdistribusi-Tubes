@@ -27,6 +27,7 @@ VUS="${VUS:-10000}"
 DURATION="${DURATION:-120s}"
 SLEEP="${SLEEP:-0.05}"
 INTERNAL_KEY="${INTERNAL_KEY:-}"
+TOKEN="${TOKEN:-}"
 MIN_VUS="${MIN_VUS:-10000}"
 MIN_DURATION="${MIN_DURATION:-120}"
 ALLOW_SMALL="${ALLOW_SMALL:-0}"
@@ -169,6 +170,7 @@ for i in "${!gen_label[@]}"; do
     -e "DURATION=$DURATION"
     -e "SLEEP=$SLEEP"
     -e "INTERNAL_KEY=$INTERNAL_KEY"
+    -e "TOKEN=$TOKEN"
   )
   [ -n "${K6_USER:-}" ] && env_args+=(-e "K6_USER=$K6_USER")
   [ -n "${K6_PASSWORD:-}" ] && env_args+=(-e "K6_PASSWORD=$K6_PASSWORD")
@@ -185,7 +187,7 @@ for i in "${!gen_label[@]}"; do
       > "$OUT/scaling-$label.log" 2>&1 &
   else
     # The remote command uses the same external k6, not a pod.
-    remote_cmd="cd '$REMOTE_OUT' && env BASE_URL='$BASE_URL' VUS='$v' DURATION='$DURATION' SLEEP='$SLEEP' INTERNAL_KEY='$INTERNAL_KEY'"
+    remote_cmd="cd '$REMOTE_OUT' && env BASE_URL='$BASE_URL' VUS='$v' DURATION='$DURATION' SLEEP='$SLEEP' INTERNAL_KEY='$INTERNAL_KEY' TOKEN='$TOKEN'"
     [ -n "${K6_USER:-}" ] && remote_cmd="$remote_cmd K6_USER='$K6_USER'"
     [ -n "${K6_PASSWORD:-}" ] && remote_cmd="$remote_cmd K6_PASSWORD='$K6_PASSWORD'"
     [ -n "${P95_MS:-}" ] && remote_cmd="$remote_cmd P95_MS='$P95_MS'"
