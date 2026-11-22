@@ -26,10 +26,6 @@ tetap tersedia untuk pengembangan lokal, tetapi bukan topologi demo.
 | `node-app` | VM VirtualBox | worker + Citus worker + aplikasi | 4 | 8 GiB |
 | `node-store` | VM VirtualBox | worker + Citus worker + observability | 4 | 8 GiB |
 
-Host fisik demo: laptop Windows dengan Intel Core Ultra 7 155H (**16 core /
-22 logical CPU**) dan **31,4 GiB RAM**; node berjalan sebagai tiga VM VirtualBox
-(12 vCPU total, tidak oversubscribed) dengan kernel Linux terpisah. Ganti nama
-node pada perintah di bawah sesuai `kubectl get nodes`.
 
 Setelah image di-import ke ketiga node (lihat bagian image), deployment utama
 adalah satu perintah:
@@ -2046,6 +2042,16 @@ Komponen:
 
 `make dev-up` sudah menjalankan image asli `sustuna/sensor-pantai` dengan profil
 practice. Token sensor dibaca dari `PANTAI_AUTH_TOKEN`.
+
+### P5.1 lokal (mock Docker Compose)
+
+Demonstrasi lokal Kriteria 1 di Docker Compose:
+
+```bash
+./tools/p5-1-test.sh
+# run deterministik dengan volume compose baru:
+RESET=1 ./tools/p5-1-mock-test.sh
+```
 
 ### Overlay ujian
 
