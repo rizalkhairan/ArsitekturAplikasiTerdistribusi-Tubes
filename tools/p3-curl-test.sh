@@ -24,6 +24,7 @@ cleanup() {
     -X POST "$PVMBG_URL/admin/schema-version" -H 'Content-Type: application/json' \
     -d '{"mode":"baseline"}' >/dev/null || true
   rm -rf "$tmp"
+  if declare -F restore_all >/dev/null; then restore_all; fi
 }
 trap cleanup EXIT
 
@@ -42,12 +43,13 @@ wait_for() {
 curl_status() {
   local expected="$1" output="$2"; shift 2
   local metrics actual elapsed
-  metrics="$(curl -sS -o "$output" -w '%{http_code} %{time_total}' "$@")" || fail "curl failed: $*"
+  metrics="$(curl -sS --connect-timeout 5 --max-time 30 -o "$output" -w '%{http_code} %{time_total}' "$@")" || fail 'curl transport failed (request arguments redacted)'
   actual="${metrics%% *}"
   elapsed="${metrics#* }"
+  printf 'HTTP %s time_total=%ss expected=%s\n' "$actual" "$elapsed" "$expected"
   [[ "$actual" == "$expected" ]] || {
     cat "$output" >&2
-    fail "expected HTTP $expected, received $actual ($*)"
+    fail "expected HTTP $expected, received $actual (request arguments redacted)"
   }
   if [[ "$expected" == 202 ]] && ! awk -v t="$elapsed" 'BEGIN { exit !(t <= 2.0) }'; then
     fail "202 response took ${elapsed}s; expected <= 2s"
@@ -311,6 +313,7 @@ for n in 1 2 3; do
   backlog_receipts+=("$(jq -r .receipt_id "$tmp/backlog-$n")")
 done
 
+if declare -F p3_receiver_crash >/dev/null; then p3_receiver_crash; fi
 docker compose start field-report-consumer
 restore_consumer=0
 processed_once() {
@@ -486,5 +489,6 @@ for service in kafka ingest-pipeline field-report-consumer bnpb client-api auth 
 done
 pass 'all four malformed classes are quarantined, service containers remain running, and a later valid report succeeds once'
 
+if declare -F p3_verify_durable_receipts >/dev/null; then p3_verify_durable_receipts; fi
 echo 'All P3 checks passed.'
 

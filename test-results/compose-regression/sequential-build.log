@@ -1,0 +1,896 @@
+ Image arsitekturaplikasiterdistribusi-tubes-coordinator Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 730B done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile:
+#2 transferring dockerfile: 581B 0.1s done
+#2 DONE 1.4s
+
+#3 [internal] load metadata for docker.io/library/alpine:3.22
+#3 ...
+
+#4 [internal] load metadata for docker.io/library/golang:1.24-alpine
+#4 DONE 13.7s
+
+#3 [internal] load metadata for docker.io/library/alpine:3.22
+#3 DONE 13.8s
+
+#5 [internal] load .dockerignore
+#5 transferring context:
+#5 transferring context: 129B 0.3s done
+#5 DONE 0.8s
+
+#6 [stage-1 1/4] FROM docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#6 resolve docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f 0.1s done
+#6 CACHED
+
+#6 [stage-1 1/4] FROM docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#6 CACHED
+
+#7 [internal] load build context
+#7 DONE 0.0s
+
+#8 [build 1/6] FROM docker.io/library/golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191
+#8 resolve docker.io/library/golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191
+#8 resolve docker.io/library/golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191 0.3s done
+#8 DONE 0.3s
+
+#7 [internal] load build context
+#7 transferring context: 28.09kB 0.1s done
+#7 DONE 0.2s
+
+#9 [build 6/6] RUN CGO_ENABLED=0 go build -trimpath -o /out/coordinator .
+#9 CACHED
+
+#10 [build 3/6] COPY libs/observability ./libs/observability
+#10 CACHED
+
+#11 [stage-1 2/4] RUN apk add --no-cache ca-certificates && addgroup -S app && adduser -S -G app app && mkdir -p /data && chown app:app /data
+#11 CACHED
+
+#12 [stage-1 3/4] WORKDIR /app
+#12 CACHED
+
+#13 [build 2/6] WORKDIR /src
+#13 CACHED
+
+#14 [build 4/6] COPY services/coordinator ./services/coordinator
+#14 CACHED
+
+#15 [build 5/6] WORKDIR /src/services/coordinator
+#15 CACHED
+
+#16 [stage-1 4/4] COPY --from=build /out/coordinator ./coordinator
+#16 CACHED
+
+#17 exporting to image
+#17 exporting layers
+#17 exporting layers 0.0s done
+#17 exporting manifest sha256:48b9988ff72a63d91f447fac47a31e963ed8c5dd2f4c841d303a34e81fc1de16 0.0s done
+#17 exporting config sha256:0336e057ea5f24dd8dcbbf8088005df942cd136a83d45bce49dcfe103a3f9b80 0.0s done
+#17 exporting attestation manifest sha256:d9c0f09b067beba0de124818e36f7fc8ef457ffff0a3ff7974c1053cc3a2b568
+#17 exporting attestation manifest sha256:d9c0f09b067beba0de124818e36f7fc8ef457ffff0a3ff7974c1053cc3a2b568 0.1s done
+#17 exporting manifest list sha256:1b8b5aa2adae7e04aa1952310410bd9ca493e9f5425f1cb1ad4926061a8e96ae 0.1s done
+#17 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-coordinator:latest
+#17 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-coordinator:latest 0.1s done
+#17 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-coordinator:latest 0.1s done
+#17 DONE 3.1s
+
+#18 resolving provenance for metadata file
+#18 DONE 0.9s
+ Image arsitekturaplikasiterdistribusi-tubes-coordinator Built 
+ Image arsitekturaplikasiterdistribusi-tubes-canonical-store Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 750B 0.0s done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 603B 0.0s done
+#2 DONE 0.1s
+
+#3 [internal] load metadata for docker.io/library/alpine:3.22
+#3 DONE 0.9s
+
+#4 [internal] load metadata for docker.io/library/golang:1.24-alpine
+#4 DONE 1.0s
+
+#5 [stage-1 1/4] FROM docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#5 resolve docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f 0.1s done
+#5 CACHED
+
+#6 [internal] load .dockerignore
+#6 transferring context: 129B 0.0s done
+#6 DONE 0.0s
+
+#5 [stage-1 1/4] FROM docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#5 CACHED
+
+#7 [internal] load build context
+#7 DONE 0.0s
+
+#8 [build 1/6] FROM docker.io/library/golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191
+#8 resolve docker.io/library/golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191 0.1s done
+#8 DONE 0.1s
+
+#7 [internal] load build context
+#7 transferring context: 27.85kB 0.1s done
+#7 DONE 0.1s
+
+#9 [build 3/6] COPY libs/observability ./libs/observability
+#9 CACHED
+
+#10 [build 4/6] COPY services/canonical-store ./services/canonical-store
+#10 CACHED
+
+#11 [build 5/6] WORKDIR /src/services/canonical-store
+#11 CACHED
+
+#12 [stage-1 3/4] WORKDIR /app
+#12 CACHED
+
+#13 [build 2/6] WORKDIR /src
+#13 CACHED
+
+#14 [build 6/6] RUN CGO_ENABLED=0 go build -trimpath -o /out/canonical-store .
+#14 CACHED
+
+#15 [stage-1 2/4] RUN apk add --no-cache ca-certificates && addgroup -S app && adduser -S -G app app && mkdir -p /data && chown app:app /data
+#15 CACHED
+
+#16 [stage-1 4/4] COPY --from=build /out/canonical-store ./canonical-store
+#16 CACHED
+
+#17 exporting to image
+#17 exporting layers
+#17 exporting layers 0.0s done
+#17 exporting manifest sha256:e00fedc152b9db93a672644819de9aa7803e170dd59856cdcacc78643290b9bf done
+#17 exporting config sha256:bf1def433c53edde633caec0004d1869568af8ff95e82032fffad82423105b73 0.0s done
+#17 exporting attestation manifest sha256:c8daf7e5405f1ca66f909b6bc500ca78c6aab39d231899f5e6a31339f99a627f
+#17 exporting attestation manifest sha256:c8daf7e5405f1ca66f909b6bc500ca78c6aab39d231899f5e6a31339f99a627f 0.1s done
+#17 exporting manifest list sha256:eb6318a28d377e02b6c10250257f4a2918226ae595e9f6742478623f8ebf9469
+#17 exporting manifest list sha256:eb6318a28d377e02b6c10250257f4a2918226ae595e9f6742478623f8ebf9469 0.1s done
+#17 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-canonical-store:latest 0.0s done
+#17 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-canonical-store:latest 0.1s done
+#17 DONE 0.8s
+
+#18 resolving provenance for metadata file
+#18 DONE 0.1s
+ Image arsitekturaplikasiterdistribusi-tubes-canonical-store Built 
+ Image arsitekturaplikasiterdistribusi-tubes-field-notifier Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 745B done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 527B 0.0s done
+#2 DONE 0.1s
+
+#3 [internal] load metadata for docker.io/library/golang:1.24-alpine
+#3 DONE 0.8s
+
+#4 [internal] load metadata for docker.io/library/alpine:3.22
+#4 DONE 0.9s
+
+#5 [internal] load .dockerignore
+#5 transferring context: 129B 0.0s done
+#5 DONE 0.1s
+
+#6 [stage-1 1/4] FROM docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#6 resolve docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#6 resolve docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f 0.1s done
+#6 CACHED
+
+#7 [internal] load build context
+#7 DONE 0.0s
+
+#8 [build 1/6] FROM docker.io/library/golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191
+#8 resolve docker.io/library/golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191 0.1s done
+#8 DONE 0.1s
+
+#7 [internal] load build context
+#7 transferring context: 8.06kB 0.4s done
+#7 DONE 0.5s
+
+#9 [build 3/6] COPY libs/observability ./libs/observability
+#9 CACHED
+
+#10 [build 4/6] COPY services/field-notifier ./services/field-notifier
+#10 CACHED
+
+#11 [stage-1 2/4] RUN apk add --no-cache ca-certificates && addgroup -S app && adduser -S -G app app
+#11 CACHED
+
+#12 [build 5/6] WORKDIR /src/services/field-notifier
+#12 CACHED
+
+#13 [build 6/6] RUN CGO_ENABLED=0 go build -trimpath -o /out/field-notifier .
+#13 CACHED
+
+#14 [stage-1 3/4] WORKDIR /app
+#14 CACHED
+
+#15 [build 2/6] WORKDIR /src
+#15 CACHED
+
+#16 [stage-1 4/4] COPY --from=build /out/field-notifier ./field-notifier
+#16 CACHED
+
+#17 exporting to image
+#17 exporting layers done
+#17 exporting manifest sha256:705db7581c4aec574e72d4a5399f999558a4a25cd4632d4e88f173c9cd03d99a 0.0s done
+#17 exporting config sha256:9c45361600bb30ae358529e73ca906044fdc6013a173e82b75d758332725d0ad 0.0s done
+#17 exporting attestation manifest sha256:c051c79b3d1df9014d32e5c1b4fa3a9e08edd7cd1e259d261ab3fd4058f7d9a2
+#17 exporting attestation manifest sha256:c051c79b3d1df9014d32e5c1b4fa3a9e08edd7cd1e259d261ab3fd4058f7d9a2 0.1s done
+#17 exporting manifest list sha256:a333163c575920ecf1ad4dfd4d33ce76b3ef409c5531b87da5e44a97326090a0
+#17 exporting manifest list sha256:a333163c575920ecf1ad4dfd4d33ce76b3ef409c5531b87da5e44a97326090a0 0.1s done
+#17 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-field-notifier:latest
+#17 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-field-notifier:latest done
+#17 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-field-notifier:latest 0.1s done
+#17 DONE 0.7s
+
+#18 resolving provenance for metadata file
+#18 DONE 0.1s
+ Image arsitekturaplikasiterdistribusi-tubes-field-notifier Built 
+ Image arsitekturaplikasiterdistribusi-tubes-pvmbg Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 717B done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile:
+#2 transferring dockerfile: 497B 0.0s done
+#2 DONE 0.2s
+
+#3 [internal] load metadata for docker.io/library/golang:1.26-alpine
+#3 ...
+
+#4 [internal] load metadata for docker.io/library/alpine:3.22
+#4 DONE 0.9s
+
+#5 [builder 1/6] FROM docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab
+#5 resolve docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab 0.1s done
+#5 DONE 0.4s
+
+#6 [builder 2/6] WORKDIR /app
+#6 DONE 0.6s
+
+#7 [stage-1 1/4] FROM docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#7 resolve docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f 0.1s done
+#7 CACHED
+
+#3 [internal] load metadata for docker.io/library/golang:1.26-alpine
+#3 DONE 0.9s
+
+#8 [internal] load build context
+#8 transferring context:
+#8 transferring context: 16.12kB 0.0s done
+#8 DONE 0.2s
+
+#9 [builder 3/6] COPY go.mod go.sum ./
+#9 DONE 0.8s
+
+#10 [builder 4/6] RUN go mod download
+#10 DONE 115.7s
+
+#11 [builder 5/6] COPY *.go schema.sql ./
+#11 DONE 2.0s
+
+#12 [builder 6/6] RUN CGO_ENABLED=0 GOOS=linux go build -o pvmbg .
+#12 DONE 558.3s
+
+#13 [stage-1 2/3] WORKDIR /app
+#13 CACHED
+
+#14 [builder 3/6] COPY go.mod go.sum ./
+#14 CACHED
+
+#15 [builder 4/6] RUN go mod download
+#15 CACHED
+
+#16 [builder 5/6] COPY *.go schema.sql ./
+#16 CACHED
+
+#17 [builder 6/6] RUN CGO_ENABLED=0 GOOS=linux go build -o pvmbg .
+#17 CACHED
+
+#18 [stage-1 3/3] COPY --from=builder /app/pvmbg .
+#18 DONE 0.2s
+
+#19 exporting to image
+#19 exporting layers
+#19 exporting layers 1.0s done
+#19 exporting manifest sha256:21607ed79e8ba49e28f65b0dde6687b4875bebd72b5433f720b2ad6e639adb7e 0.0s done
+#19 exporting config sha256:56efabf3229d9d612e71e56bee767f1f4b5237624b9cb622c22ef84cd17f5c26 0.0s done
+#19 exporting attestation manifest sha256:354c1bd8b0f422d8456bfdbcb442954dfcf563a11f2c2c181506eb1356e1adbd 0.0s done
+#19 exporting manifest list sha256:6d23c75898fb04b1a2abcab07f288dd335bbe66a713533abc1bc8369f7964e63 0.0s done
+#19 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-pvmbg:latest done
+#19 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-pvmbg:latest
+#19 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-pvmbg:latest 0.2s done
+#19 DONE 1.3s
+
+#20 resolving provenance for metadata file
+#20 DONE 0.1s
+ Image arsitekturaplikasiterdistribusi-tubes-pvmbg Built 
+ Image arsitekturaplikasiterdistribusi-tubes-bmkg Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 711B done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 477B 0.0s done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/golang:1.26-alpine
+#3 DONE 1.4s
+
+#4 [internal] load metadata for docker.io/library/alpine:3.22
+#4 DONE 1.4s
+
+#5 [builder 1/6] FROM docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab
+#5 resolve docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab 0.0s done
+#5 DONE 0.0s
+
+#6 [stage-1 1/3] FROM docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#6 resolve docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f 0.0s done
+#6 DONE 0.0s
+
+#7 [internal] load build context
+#7 transferring context: 413B done
+#7 DONE 0.0s
+
+#8 [builder 3/6] COPY go.mod go.sum ./
+#8 CACHED
+
+#9 [builder 4/6] RUN go mod download
+#9 CACHED
+
+#10 [builder 2/6] WORKDIR /app
+#10 CACHED
+
+#11 [builder 5/6] COPY . .
+#11 CACHED
+
+#12 [builder 6/6] RUN CGO_ENABLED=0 GOOS=linux go build -o bmkg .
+#12 DONE 32.0s
+
+#13 [stage-1 2/3] WORKDIR /app
+#13 CACHED
+
+#14 [stage-1 3/3] COPY --from=builder /app/bmkg .
+#14 DONE 0.3s
+
+#15 exporting to image
+#15 exporting layers
+#15 exporting layers 1.0s done
+#15 exporting manifest sha256:00cd17ca0b0c9fa3f4d753d25d2326102cb828d474764dfa7accf57e0567d1e0 0.0s done
+#15 exporting config sha256:85b4a649350b643805efff1ed4043f9aed299d7e05b8cd367da5fc90bd4bcea0 0.0s done
+#15 exporting attestation manifest sha256:d563f90782fd6d95efc3067a06813242a8272984b43dcaaa834f201cfee6ef92 0.0s done
+#15 exporting manifest list sha256:e2d2085dddef0697cbda447af373ae2f5fc3059c56ecfd561442890caba5d800 0.0s done
+#15 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-bmkg:latest done
+#15 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-bmkg:latest
+#15 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-bmkg:latest 0.2s done
+#15 DONE 1.3s
+
+#16 resolving provenance for metadata file
+#16 DONE 0.1s
+ Image arsitekturaplikasiterdistribusi-tubes-bmkg Built 
+ Image arsitekturaplikasiterdistribusi-tubes-ingest-pipeline Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 777B 0.1s done
+#1 DONE 0.1s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 541B 0.0s done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/golang:1.26-alpine
+#3 DONE 1.4s
+
+#4 [internal] load metadata for docker.io/library/alpine:3.22
+#4 DONE 1.4s
+
+#5 [internal] load .dockerignore
+#5 transferring context: 2B 0.0s done
+#5 DONE 0.0s
+
+#6 [stage-1 1/4] FROM docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#6 resolve docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f 0.0s done
+#6 DONE 0.0s
+
+#7 [builder 1/6] FROM docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab
+#7 resolve docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab 0.0s done
+#7 DONE 0.1s
+
+#8 [internal] load build context
+#8 transferring context: 205B done
+#8 DONE 0.0s
+
+#9 [builder 3/6] COPY go.mod go.sum ./
+#9 CACHED
+
+#10 [builder 2/6] WORKDIR /src
+#10 CACHED
+
+#11 [builder 4/6] RUN go mod download
+#11 CACHED
+
+#12 [builder 5/6] COPY . ./
+#12 CACHED
+
+#13 [builder 6/6] RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/ingest-pipeline .
+#13 DONE 29.1s
+
+#14 [stage-1 2/4] RUN apk add --no-cache ca-certificates && addgroup -S ingest && adduser -S -G ingest ingest && mkdir -p /app/data && chown ingest:ingest /app/data
+#14 CACHED
+
+#15 [stage-1 3/4] WORKDIR /app
+#15 CACHED
+
+#16 [stage-1 4/4] COPY --from=builder /out/ingest-pipeline ./ingest-pipeline
+#16 CACHED
+
+#17 exporting to image
+#17 exporting layers 0.0s done
+#17 exporting manifest sha256:bc45dc8ccd8db97a81057127acc6a68d78fe78d669dcaebbe2858300488dbfa1 0.0s done
+#17 exporting config sha256:d84f6c8e4df28739d6d4b7c9fda1258beb37e118c8de7ccfc20564f40fe73f2e done
+#17 exporting attestation manifest sha256:32b4ae58ef01201a4f4b5e4c8d03bdb0c5560ffd54ae96eb115e045c61a87c2d 0.0s done
+#17 exporting manifest list sha256:46a1db596c6d667540ee51e209fdfb0138510d99388d5833cbf80777d779d6c2 0.0s done
+#17 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-ingest-pipeline:latest done
+#17 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-ingest-pipeline:latest 0.0s done
+#17 DONE 0.2s
+
+#18 resolving provenance for metadata file
+#18 DONE 0.1s
+ Image arsitekturaplikasiterdistribusi-tubes-ingest-pipeline Built 
+ Image arsitekturaplikasiterdistribusi-tubes-field-report-consumer Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 1.46kB done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 541B 0.0s done
+#2 DONE 0.1s
+
+#3 [internal] load metadata for docker.io/library/golang:1.26-alpine
+#3 DONE 2.2s
+
+#4 [internal] load metadata for docker.io/library/alpine:3.22
+#4 DONE 2.2s
+
+#5 [internal] load .dockerignore
+#5 transferring context: 2B done
+#5 DONE 0.0s
+
+#6 [builder 1/6] FROM docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab
+#6 resolve docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab 0.0s done
+#6 DONE 0.0s
+
+#7 [stage-1 1/4] FROM docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#7 resolve docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f 0.0s done
+#7 DONE 0.0s
+
+#8 [internal] load build context
+#8 transferring context: 205B done
+#8 DONE 0.0s
+
+#9 [builder 4/6] RUN go mod download
+#9 CACHED
+
+#10 [builder 5/6] COPY . ./
+#10 CACHED
+
+#11 [builder 2/6] WORKDIR /src
+#11 CACHED
+
+#12 [stage-1 3/4] WORKDIR /app
+#12 CACHED
+
+#13 [stage-1 2/4] RUN apk add --no-cache ca-certificates && addgroup -S ingest && adduser -S -G ingest ingest && mkdir -p /app/data && chown ingest:ingest /app/data
+#13 CACHED
+
+#14 [builder 3/6] COPY go.mod go.sum ./
+#14 CACHED
+
+#15 [builder 6/6] RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/ingest-pipeline .
+#15 CACHED
+
+#16 [stage-1 4/4] COPY --from=builder /out/ingest-pipeline ./ingest-pipeline
+#16 CACHED
+
+#17 exporting to image
+#17 exporting layers done
+#17 exporting manifest sha256:6116ef9b7990ce701ad1ae6a5c4000040e125ce880c62b627d40a7e40a3d4291 done
+#17 exporting config sha256:e6615de24e8a4ca933e75916cd857fbdc53890ea121defa4ac81f7860e4fafbf done
+#17 exporting attestation manifest sha256:1f42bf538d6e17538714eb1d7d3baf4d95db414fd8873ebd252e17ee916ec863
+#17 exporting attestation manifest sha256:1f42bf538d6e17538714eb1d7d3baf4d95db414fd8873ebd252e17ee916ec863 0.0s done
+#17 exporting manifest list sha256:1fe1e3355d374cf26df72949c705d535da0b2bc2737febf5e607ae24d213a01d 0.0s done
+#17 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-field-report-consumer:latest done
+#17 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-field-report-consumer:latest done
+#17 DONE 0.1s
+
+#18 resolving provenance for metadata file
+#18 DONE 0.0s
+ Image arsitekturaplikasiterdistribusi-tubes-field-report-consumer Built 
+ Image arsitekturaplikasiterdistribusi-tubes-auth Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 705B done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 777B 0.0s done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/alpine:3.22
+#3 DONE 0.7s
+
+#4 [internal] load metadata for docker.io/library/golang:1.26-alpine
+#4 DONE 0.7s
+
+#5 [stage-1 1/4] FROM docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#5 resolve docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f 0.1s done
+#5 DONE 0.1s
+
+#6 [builder 1/8] FROM docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab
+#6 resolve docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab 0.1s done
+#6 DONE 0.1s
+
+#7 [internal] load build context
+#7 transferring context: 24B
+#7 transferring context: 1.18kB 0.0s done
+#7 DONE 0.0s
+
+#8 [builder 5/8] RUN go mod download
+#8 CACHED
+
+#9 [builder 6/8] COPY auth/ ./
+#9 CACHED
+
+#10 [builder 2/8] WORKDIR /src/auth
+#10 CACHED
+
+#11 [builder 3/8] COPY auth/go.mod auth/go.sum ./
+#11 CACHED
+
+#12 [builder 4/8] COPY shared/go.mod shared/go.sum /src/shared/
+#12 CACHED
+
+#13 [builder 7/8] COPY shared/ /src/shared/
+#13 CACHED
+
+#14 [builder 8/8] RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/auth .
+#14 DONE 29.9s
+
+#15 [stage-1 2/4] RUN apk add --no-cache ca-certificates     && addgroup -S auth && adduser -S -G auth auth     && mkdir -p /app/data && chown auth:auth /app/data
+#15 CACHED
+
+#16 [stage-1 3/4] WORKDIR /app
+#16 CACHED
+
+#17 [stage-1 4/4] COPY --from=builder /out/auth ./auth
+#17 DONE 0.3s
+
+#18 exporting to image
+#18 exporting layers
+#18 exporting layers 1.2s done
+#18 exporting manifest sha256:89d461cca8863aabdb5cfc416703173c2712d71107e65a56fe51780751a7fc6c 0.0s done
+#18 exporting config sha256:2e210cb79eaca02984205089e48b8def0111a3780578481b8b25b3e2f10217ca 0.0s done
+#18 exporting attestation manifest sha256:397720c2e126b005562e3b4e899ff49f595ff90ef9a5729ed584023225282cb5 0.0s done
+#18 exporting manifest list sha256:905f727a1cae1b763a31ffdc817de913bf7e358fd7115e61c91454faed9fc1f8 0.0s done
+#18 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-auth:latest done
+#18 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-auth:latest
+#18 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-auth:latest 0.4s done
+#18 DONE 1.8s
+
+#19 resolving provenance for metadata file
+#19 DONE 0.1s
+ Image arsitekturaplikasiterdistribusi-tubes-auth Built 
+ Image arsitekturaplikasiterdistribusi-tubes-client-api Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 5.69kB done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 941B 0.0s done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/golang:1.26-alpine
+#3 DONE 1.4s
+
+#4 [internal] load metadata for docker.io/library/alpine:3.22
+#4 DONE 1.4s
+
+#5 [builder  1/10] FROM docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab
+#5 resolve docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab 0.0s done
+#5 DONE 0.0s
+
+#6 [stage-1 1/4] FROM docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#6 resolve docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f 0.0s done
+#6 DONE 0.0s
+
+#7 [internal] load build context
+#7 transferring context: 88.77kB 0.0s done
+#7 DONE 0.1s
+
+#8 [builder  7/10] COPY libs/observability /src/libs/observability
+#8 CACHED
+
+#9 [builder  8/10] COPY services/shared /src/services/shared
+#9 CACHED
+
+#10 [builder  2/10] WORKDIR /src/services/client-api
+#10 CACHED
+
+#11 [builder  3/10] COPY libs/observability/go.mod /src/libs/observability/
+#11 CACHED
+
+#12 [builder  5/10] COPY services/client-api/go.mod services/client-api/go.sum ./
+#12 CACHED
+
+#13 [builder  6/10] RUN go mod download
+#13 CACHED
+
+#14 [builder  4/10] COPY services/shared/go.mod services/shared/go.sum /src/services/shared/
+#14 CACHED
+
+#15 [builder  9/10] COPY services/client-api/ ./
+#15 CACHED
+
+#16 [builder 10/10] RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/client-api .
+#16 DONE 24.7s
+
+#17 [stage-1 2/4] RUN apk add --no-cache ca-certificates     && addgroup -S clientapi && adduser -S -G clientapi clientapi
+#17 CACHED
+
+#18 [stage-1 3/4] WORKDIR /app
+#18 CACHED
+
+#19 [stage-1 4/4] COPY --from=builder /out/client-api ./client-api
+#19 DONE 0.2s
+
+#20 exporting to image
+#20 exporting layers
+#20 exporting layers 1.0s done
+#20 exporting manifest sha256:2e16f3cc7e5ddbf80928b19b6ddc0dfcaf2c85723f97deb61371463ad49dd8e6 0.0s done
+#20 exporting config sha256:70a9c211a12b74306dc7e35887a8d08cd7b4d7737e6d9cdcdd62bf1c984eed4f 0.0s done
+#20 exporting attestation manifest sha256:e357b78a7eb10ba8543027717dc5ca1cc4698d72b82445e7629041ff277302a6 0.0s done
+#20 exporting manifest list sha256:7bc5ae4c89af4361f1620404e857ad0bdaf0cd0db4a1d1ded7621f80d2e9bf9f 0.0s done
+#20 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-client-api:latest done
+#20 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-client-api:latest
+#20 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-client-api:latest 0.2s done
+#20 DONE 1.3s
+
+#21 resolving provenance for metadata file
+#21 DONE 0.0s
+ Image arsitekturaplikasiterdistribusi-tubes-client-api Built 
+ Image arsitekturaplikasiterdistribusi-tubes-bnpb Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 4.47kB done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 1.47kB 0.0s done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/golang:1.26-alpine
+#3 ...
+
+#4 [internal] load metadata for docker.io/library/alpine:3.22
+#4 DONE 0.5s
+
+#3 [internal] load metadata for docker.io/library/golang:1.26-alpine
+#3 DONE 0.5s
+
+#5 [stage-1 1/6] FROM docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#5 resolve docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f 0.0s done
+#5 DONE 0.0s
+
+#6 [builder  1/12] FROM docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab
+#6 resolve docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab 0.0s done
+#6 DONE 0.0s
+
+#7 [internal] load build context
+#7 transferring context: 392.13kB 0.1s done
+#7 DONE 0.1s
+
+#8 [builder 10/12] COPY services/bmkg/proto /src/services/bmkg/proto
+#8 CACHED
+
+#9 [builder  2/12] WORKDIR /src/services/bnpb
+#9 CACHED
+
+#10 [builder  3/12] COPY services/bmkg/go.mod services/bmkg/go.sum /src/services/bmkg/
+#10 CACHED
+
+#11 [builder  9/12] COPY services/shared /src/services/shared
+#11 CACHED
+
+#12 [builder  4/12] COPY libs/observability/go.mod /src/libs/observability/
+#12 CACHED
+
+#13 [builder  5/12] COPY services/shared/go.mod services/shared/go.sum /src/services/shared/
+#13 CACHED
+
+#14 [builder  6/12] COPY services/bnpb/go.mod services/bnpb/go.sum ./
+#14 CACHED
+
+#15 [builder  7/12] RUN go mod download
+#15 CACHED
+
+#16 [builder  8/12] COPY libs/observability /src/libs/observability
+#16 CACHED
+
+#17 [builder 11/12] COPY services/bnpb/ ./
+#17 CACHED
+
+#18 [builder 12/12] RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/bnpb .     && CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/canonical-admin ./cmd/canonical-admin     && CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/canonical-api ./cmd/canonical-api
+#18 DONE 42.3s
+
+#19 [stage-1 2/6] RUN apk add --no-cache ca-certificates     && addgroup -S bnpb && adduser -S -G bnpb bnpb     && mkdir -p /app/data && chown bnpb:bnpb /app/data
+#19 CACHED
+
+#20 [stage-1 3/6] WORKDIR /app
+#20 CACHED
+
+#21 [stage-1 4/6] COPY --from=builder /out/bnpb ./bnpb
+#21 DONE 0.3s
+
+#22 [stage-1 5/6] COPY --from=builder /out/canonical-admin ./canonical-admin
+#22 DONE 0.2s
+
+#23 [stage-1 6/6] COPY --from=builder /out/canonical-api ./canonical-api
+#23 DONE 0.2s
+
+#24 exporting to image
+#24 exporting layers
+#24 exporting layers 1.5s done
+#24 exporting manifest sha256:6530b9b97383aa71735a630406d3da7368f442618992a0cffa7ebbcb0063c00f 0.0s done
+#24 exporting config sha256:3d94b12fe89a54f758fdf53e635f3e2e12953611687f74dc9af1d4b6f606935e 0.0s done
+#24 exporting attestation manifest sha256:a700f8dc00d5122bf7996d034f582f1706fa01c0daf7b439539d7ca1a4deaea8 0.0s done
+#24 exporting manifest list sha256:515ebee095ef6c2682a3f0e2757f514b8b7d41a4289c69fe10bbec56f68dcbba
+#24 exporting manifest list sha256:515ebee095ef6c2682a3f0e2757f514b8b7d41a4289c69fe10bbec56f68dcbba 0.0s done
+#24 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-bnpb:latest done
+#24 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-bnpb:latest
+#24 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-bnpb:latest 0.5s done
+#24 DONE 2.2s
+
+#25 resolving provenance for metadata file
+#25 DONE 0.1s
+ Image arsitekturaplikasiterdistribusi-tubes-bnpb Built 
+ Image arsitekturaplikasiterdistribusi-tubes-dashboard-updater Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 789B done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 624B 0.0s done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/alpine:3.22
+#3 DONE 1.3s
+
+#4 [internal] load metadata for docker.io/library/golang:1.26-alpine
+#4 DONE 1.3s
+
+#5 [stage-1 1/4] FROM docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#5 resolve docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f 0.0s done
+#5 DONE 0.0s
+
+#6 [builder 1/6] FROM docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab
+#6 resolve docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab 0.0s done
+#6 DONE 0.0s
+
+#7 [internal] load build context
+#7 transferring context: 186B done
+#7 DONE 0.0s
+
+#8 [builder 3/6] COPY go.mod ./
+#8 CACHED
+
+#9 [builder 4/6] RUN go mod download
+#9 CACHED
+
+#10 [builder 2/6] WORKDIR /src
+#10 CACHED
+
+#11 [builder 5/6] COPY . ./
+#11 CACHED
+
+#12 [builder 6/6] RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/dashboard-updater .
+#12 DONE 18.9s
+
+#13 [stage-1 2/4] RUN addgroup -S dashboard && adduser -S -G dashboard dashboard
+#13 CACHED
+
+#14 [stage-1 3/4] WORKDIR /app
+#14 CACHED
+
+#15 [stage-1 4/4] COPY --from=builder /out/dashboard-updater ./dashboard-updater
+#15 CACHED
+
+#16 exporting to image
+#16 exporting layers 0.0s done
+#16 exporting manifest sha256:52e523109d8ac32ad82894bd249b845c1bf043685031a4abcf274f95505876fb done
+#16 exporting config sha256:7fa9cb9d44951c49e803b6e23e58b6663b37c9e501a1a2cc0b6f8830fac0bef9 done
+#16 exporting attestation manifest sha256:73701c444991d159348b98991f9bab82ed10dec8cba69604f943f43afa205f11
+#16 exporting attestation manifest sha256:73701c444991d159348b98991f9bab82ed10dec8cba69604f943f43afa205f11 0.0s done
+#16 exporting manifest list sha256:7f85f5db7fc40fcbddb30bdc65655ee1511fa24683e3350cc832501923334996 0.0s done
+#16 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-dashboard-updater:latest done
+#16 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-dashboard-updater:latest 0.1s done
+#16 DONE 0.3s
+
+#17 resolving provenance for metadata file
+#17 DONE 0.0s
+ Image arsitekturaplikasiterdistribusi-tubes-dashboard-updater Built 
+ Image arsitekturaplikasiterdistribusi-tubes-notifier Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 735B done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 584B 0.0s done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/golang:1.26-alpine
+#3 ...
+
+#4 [internal] load metadata for docker.io/library/alpine:3.22
+#4 DONE 0.4s
+
+#3 [internal] load metadata for docker.io/library/golang:1.26-alpine
+#3 DONE 0.5s
+
+#5 [stage-1 1/4] FROM docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#5 resolve docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f 0.0s done
+#5 DONE 0.0s
+
+#6 [builder 1/6] FROM docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab
+#6 resolve docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab 0.0s done
+#6 DONE 0.0s
+
+#7 [internal] load build context
+#7 transferring context: 186B done
+#7 DONE 0.0s
+
+#8 [builder 3/6] COPY go.mod ./
+#8 CACHED
+
+#9 [builder 2/6] WORKDIR /src
+#9 CACHED
+
+#10 [builder 4/6] RUN go mod download
+#10 CACHED
+
+#11 [builder 5/6] COPY . ./
+#11 CACHED
+
+#12 [builder 6/6] RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/notifier .
+#12 DONE 17.0s
+
+#13 [stage-1 3/4] WORKDIR /app
+#13 CACHED
+
+#14 [stage-1 2/4] RUN addgroup -S notifier && adduser -S -G notifier notifier
+#14 CACHED
+
+#15 [stage-1 4/4] COPY --from=builder /out/notifier ./notifier
+#15 CACHED
+
+#16 exporting to image
+#16 exporting layers done
+#16 exporting manifest sha256:35d13ffc1c61f171a21bcd74bc4c163fbcba4cf8b1eabc956a0bdadaabc62b9f done
+#16 exporting config sha256:77574952dafff468dc4b8f2f6776e061f374b4cf09415bddd63670f342c64cee done
+#16 exporting attestation manifest sha256:c93a74018217c1f8d288ea003a6f269fd8b07b9ed6d5be92d4e4efe69c5b9970 0.0s done
+#16 exporting manifest list sha256:0a2e3c05ebe1c9f05b2a383a0896ecc194b3481c63a3082825e67b492a7c51fc 0.0s done
+#16 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-notifier:latest
+#16 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-notifier:latest done
+#16 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-notifier:latest 0.0s done
+#16 DONE 0.1s
+
+#17 resolving provenance for metadata file
+#17 DONE 0.0s
+ Image arsitekturaplikasiterdistribusi-tubes-notifier Built 

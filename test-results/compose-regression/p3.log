@@ -1,0 +1,122 @@
+Compatibility declaration: additive optional fields are accepted and retained in attributes; rename/type_change/missing_required are parked as schema_incompatible until the mapper is updated and Ops replays them.
+P3.1 — health and access control
+HTTP 200 time_total=0.081713s expected=200
+HTTP 401 time_total=0.015081s expected=401
+HTTP 401 time_total=0.010575s expected=401
+HTTP 401 time_total=0.011205s expected=401
+HTTP 401 time_total=0.007215s expected=401
+HTTP 200 time_total=0.015806s expected=200
+PASS: Audit can list metadata, and does not receive raw payloads
+P3.2 — lossless quarantine for arbitrary raw bytes
+HTTP 201 time_total=0.029208s expected=201
+HTTP 200 time_total=0.035497s expected=200
+HTTP 200 time_total=0.007202s expected=200
+PASS: Ops retrieves the exact original invalid UTF-8 byte sequence
+P3.3 — retry unavailable canonical API, then recover
+ Container arsitekturaplikasiterdistribusi-tubes-bnpb-1 Stopping 
+ Container arsitekturaplikasiterdistribusi-tubes-bnpb-1 Stopped 
+HTTP 201 time_total=0.012945s expected=201
+HTTP 200 time_total=0.004225s expected=200
+ Container arsitekturaplikasiterdistribusi-tubes-kafka-1 Waiting 
+ Container arsitekturaplikasiterdistribusi-tubes-kafka-1 Healthy 
+ Container arsitekturaplikasiterdistribusi-tubes-topic-init-1 Starting 
+ Container arsitekturaplikasiterdistribusi-tubes-topic-init-1 Started 
+ Container arsitekturaplikasiterdistribusi-tubes-topic-init-1 Waiting 
+ Container arsitekturaplikasiterdistribusi-tubes-topic-init-1 Exited 
+ Container arsitekturaplikasiterdistribusi-tubes-kafka-1 Waiting 
+ Container arsitekturaplikasiterdistribusi-tubes-ingest-pipeline-1 Waiting 
+ Container arsitekturaplikasiterdistribusi-tubes-topic-init-1 Waiting 
+ Container arsitekturaplikasiterdistribusi-tubes-ingest-pipeline-1 Healthy 
+ Container arsitekturaplikasiterdistribusi-tubes-topic-init-1 Exited 
+ Container arsitekturaplikasiterdistribusi-tubes-kafka-1 Healthy 
+ Container arsitekturaplikasiterdistribusi-tubes-bnpb-1 Starting 
+ Container arsitekturaplikasiterdistribusi-tubes-bnpb-1 Started 
+PASS: retrying record was replayed and removed from the unprocessed list
+P3.4 — PVMBG schema drift, raw inspection, and replay
+HTTP 200 time_total=0.029440s expected=200
+PASS: additive PVMBG attribute is retained in canonical HazardEvent.attributes
+HTTP 200 time_total=0.023196s expected=200
+HTTP 200 time_total=0.004738s expected=200
+HTTP 200 time_total=0.004769s expected=200
+HTTP 200 time_total=0.017566s expected=200
+HTTP 200 time_total=0.011228s expected=200
+HTTP 200 time_total=0.022485s expected=200
+HTTP 200 time_total=0.004051s expected=200
+PASS: rename incompatibility was quarantined, inspectable by Ops, and replayed
+HTTP 200 time_total=0.003382s expected=200
+HTTP 200 time_total=0.004395s expected=200
+HTTP 200 time_total=0.004741s expected=200
+HTTP 200 time_total=0.009632s expected=200
+HTTP 200 time_total=0.020843s expected=200
+HTTP 200 time_total=0.005900s expected=200
+PASS: type_change incompatibility was quarantined, inspectable by Ops, and replayed
+HTTP 200 time_total=0.009939s expected=200
+HTTP 200 time_total=0.003734s expected=200
+HTTP 200 time_total=0.008040s expected=200
+HTTP 200 time_total=0.023885s expected=200
+HTTP 200 time_total=0.017629s expected=200
+HTTP 200 time_total=0.028161s expected=200
+PASS: missing_required incompatibility was quarantined, inspectable by Ops, and replayed
+HTTP 200 time_total=0.004495s expected=200
+P3.4b — per-source_ref_id replay order and deduplication
+HTTP 201 time_total=0.010210s expected=201
+HTTP 201 time_total=0.029613s expected=201
+HTTP 409 time_total=0.005282s expected=409
+HTTP 200 time_total=0.031196s expected=200
+HTTP 200 time_total=0.022101s expected=200
+HTTP 200 time_total=0.006826s expected=200
+HTTP 200 time_total=0.006394s expected=200
+HTTP 200 time_total=0.003935s expected=200
+HTTP 200 time_total=0.007529s expected=200
+PASS: out-of-order replay is rejected; ordered replay recovers both messages into one canonical source row
+P3.5 — field report scope, idempotency, and poison-record recovery
+HTTP 200 time_total=0.150028s expected=200
+HTTP 200 time_total=0.015453s expected=200
+HTTP 403 time_total=0.007452s expected=403
+PASS: media user cannot write a field report
+ Container arsitekturaplikasiterdistribusi-tubes-field-report-consumer-1 Stopping 
+ Container arsitekturaplikasiterdistribusi-tubes-field-report-consumer-1 Stopped 
+HTTP 202 time_total=0.059881s expected=202
+HTTP 202 time_total=0.030527s expected=202
+HTTP 409 time_total=0.004375s expected=409
+HTTP 202 time_total=0.028978s expected=202
+HTTP 202 time_total=0.032486s expected=202
+HTTP 202 time_total=0.048170s expected=202
+ Container arsitekturaplikasiterdistribusi-tubes-kafka-1 Waiting 
+ Container arsitekturaplikasiterdistribusi-tubes-kafka-1 Healthy 
+ Container arsitekturaplikasiterdistribusi-tubes-topic-init-1 Starting 
+ Container arsitekturaplikasiterdistribusi-tubes-topic-init-1 Started 
+ Container arsitekturaplikasiterdistribusi-tubes-topic-init-1 Waiting 
+ Container arsitekturaplikasiterdistribusi-tubes-topic-init-1 Exited 
+ Container arsitekturaplikasiterdistribusi-tubes-ingest-pipeline-1 Waiting 
+ Container arsitekturaplikasiterdistribusi-tubes-ingest-pipeline-1 Healthy 
+ Container arsitekturaplikasiterdistribusi-tubes-field-report-consumer-1 Starting 
+ Container arsitekturaplikasiterdistribusi-tubes-field-report-consumer-1 Started 
+HTTP 202 time_total=0.032358s expected=202
+ Container arsitekturaplikasiterdistribusi-tubes-field-report-consumer-1 Killing 
+ Container arsitekturaplikasiterdistribusi-tubes-field-report-consumer-1 Killed 
+ Container arsitekturaplikasiterdistribusi-tubes-kafka-1 Waiting 
+ Container arsitekturaplikasiterdistribusi-tubes-kafka-1 Healthy 
+ Container arsitekturaplikasiterdistribusi-tubes-topic-init-1 Starting 
+ Container arsitekturaplikasiterdistribusi-tubes-topic-init-1 Started 
+ Container arsitekturaplikasiterdistribusi-tubes-topic-init-1 Waiting 
+ Container arsitekturaplikasiterdistribusi-tubes-topic-init-1 Exited 
+ Container arsitekturaplikasiterdistribusi-tubes-ingest-pipeline-1 Waiting 
+ Container arsitekturaplikasiterdistribusi-tubes-ingest-pipeline-1 Healthy 
+ Container arsitekturaplikasiterdistribusi-tubes-field-report-consumer-1 Starting 
+ Container arsitekturaplikasiterdistribusi-tubes-field-report-consumer-1 Started 
+HTTP 400 time_total=0.045759s expected=400
+HTTP 200 time_total=0.007956s expected=200
+PASS: 202 returns within 2s while consumer is stopped; queued reports survive downtime/SIGKILL and each has one successful logical insertion; invalid JSON is rejected
+P3.6 — poison Kafka records are quarantined without stopping consumer
+HTTP 200 time_total=0.023355s expected=200
+ arsitekturaplikasiterdistribusi-tubes-kafka-1 Copying C:/Users/HP/AppData/Local/Temp/tmp.r1SW3sx3jk/p3-poison-producer to arsitekturaplikasiterdistribusi-tubes-kafka-1:/tmp/p3-poison-producer
+ arsitekturaplikasiterdistribusi-tubes-kafka-1 Copied C:/Users/HP/AppData/Local/Temp/tmp.r1SW3sx3jk/p3-poison-producer to arsitekturaplikasiterdistribusi-tubes-kafka-1:/tmp/p3-poison-producer
+HTTP 200 time_total=0.004632s expected=200
+HTTP 200 time_total=0.021885s expected=200
+HTTP 200 time_total=0.013826s expected=200
+HTTP 200 time_total=0.004235s expected=200
+HTTP 200 time_total=0.037798s expected=200
+HTTP 202 time_total=0.037783s expected=202
+PASS: all four malformed classes are quarantined, service containers remain running, and a later valid report succeeds once
+All P3 checks passed.

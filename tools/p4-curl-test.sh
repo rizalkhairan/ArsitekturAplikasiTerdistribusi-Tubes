@@ -14,7 +14,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 MODE="${1:-local}"
 for tool in curl jq; do command -v "$tool" >/dev/null || { echo "Missing required tool: $tool" >&2; exit 1; }; done
-if [[ "$MODE" != "--live-external" && "$MODE" != "live-external" ]]; then
+if [[ "$MODE" != "--live-external" && "$MODE" != "live-external" && "${P4_BACKEND:-compose}" != kubernetes ]]; then
   command -v docker >/dev/null || { echo "Missing required tool: docker (use --live-external to observe a deployed processor without Docker)" >&2; exit 1; }
 fi
 LOCAL_URL="http://localhost:8096"
@@ -32,6 +32,9 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
 skip() { echo "SKIP: $*"; }
 compose() { docker compose --profile p4-test "$@"; }
+if [[ "${P4_BACKEND:-compose}" == kubernetes ]]; then
+  source tools/p4-kubernetes-backend.sh
+fi
 get_status() { curl -fsS "$LOCAL_URL/status"; }
 get_state() { curl -fsS -H "Authorization: Bearer $TEST_TOKEN" "$LOCAL_URL/__test/state"; }
 status_field() { get_status | jq -r "$1"; }
@@ -222,6 +225,7 @@ jq -e 'length == 1 and .[0].attributes.detection_count == 2' <<<"$crash_fires" >
 pass 'P4.5 SIGKILL/restart resumes from durable offset and produces one final fire'
 
 before_reconnect="$(status_field .reconnect_attempts)"; before_offset="$(status_field .source_offset)"
+before_resume_detections="$(status_field .active_detections)"
 curl -fsS -X POST "$MOCK_URL/__admin/disconnect" -H 'Content-Type: application/json' -d '{}' >/dev/null
 cat >"$tmp/resume.json" <<JSON
 {"events":[{"type":"heartbeat","data":{"virtual_now":"2026-11-16T00:00:00Z"}},{"type":"detection","data":{"satellite":"RESUME-$nonce","acq_date":"2026-11-15","acq_time":"0500","latitude":-7.0,"longitude":125.0,"confidence":"h","frp":1}}]}
@@ -230,7 +234,9 @@ resume="$(post_events "$tmp/resume.json")"; resume_offset="$(jq -r .latest_offse
 wait_for 'feed reconnection' "[[ \$(status_field .reconnect_attempts) -gt $before_reconnect ]]"
 [[ "$(status_field .source_offset)" == "$resume_offset" ]] || fail 'P4.8 source offset is not at the latest feed offset'
 [[ "$resume_offset" -gt "$before_offset" ]] || fail 'P4.8 no data consumed after reconnect'
+[[ "$(status_field .active_detections)" -eq $((before_resume_detections + 1)) ]] || fail 'P4.8 reconnect lost or duplicated detection effects'
 pass 'P4.8 forced disconnect resumes contiguously and reaches latest offset'
+if declare -F p4_full_recovery_check >/dev/null; then p4_full_recovery_check; fi
 
 if [[ -n "${P4_REFERENCE_FILE:-}" && -f "$P4_REFERENCE_FILE" ]]; then
   get_state | jq -S '[.fires[] | {source_ref_id, hazard_type:"WILDFIRE", severity, area_name, latitude, longitude, occurred_at, attributes}] | sort_by(.source_ref_id)' >"$tmp/actual.json"

@@ -23,6 +23,8 @@ client/target/
 *.iml
 .vscode/
 *.log
+# Retain acceptance-test logs with the other shareable evidence.
+!/test-results/**/*.log
 
 tests/*
 doc/*

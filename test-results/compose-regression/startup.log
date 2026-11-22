@@ -1,0 +1,602 @@
+ Image sustuna/sensor-pantai@sha256:51fbd90d3891ad6e9f5768ad330ffb65205644cb29e50da65c7538f2e0b4397d Pulling 
+ 7454e7057459 Pulling fs layer 0B
+ 805cdf4aa1ae Pulling fs layer 0B
+ 805cdf4aa1ae Downloading 1.049MB
+ 805cdf4aa1ae Downloading 1.049MB
+ 805cdf4aa1ae Downloading 2.097MB
+ 805cdf4aa1ae Downloading 2.097MB
+ 7454e7057459 Download complete 0B
+ 805cdf4aa1ae Download complete 0B
+ 805cdf4aa1ae Extracting 1B
+ 7454e7057459 Pull complete 0B
+ 805cdf4aa1ae Pull complete 0B
+ Image sustuna/sensor-pantai@sha256:51fbd90d3891ad6e9f5768ad330ffb65205644cb29e50da65c7538f2e0b4397d Pulled 
+ Image arsitekturaplikasiterdistribusi-tubes-canonical-store Building 
+ Image arsitekturaplikasiterdistribusi-tubes-field-notifier Building 
+ Image arsitekturaplikasiterdistribusi-tubes-bnpb Building 
+ Image arsitekturaplikasiterdistribusi-tubes-notifier Building 
+ Image arsitekturaplikasiterdistribusi-tubes-dashboard-updater Building 
+ Image arsitekturaplikasiterdistribusi-tubes-ingest-pipeline Building 
+ Image arsitekturaplikasiterdistribusi-tubes-client-api Building 
+ Image arsitekturaplikasiterdistribusi-tubes-field-report-consumer Building 
+ Image arsitekturaplikasiterdistribusi-tubes-coordinator Building 
+ Image arsitekturaplikasiterdistribusi-tubes-auth Building 
+ Image arsitekturaplikasiterdistribusi-tubes-bmkg Building 
+ Image arsitekturaplikasiterdistribusi-tubes-pvmbg Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 7.92kB done
+#1 DONE 0.0s
+
+#2 [ingest-pipeline internal] load build definition from Dockerfile
+#2 transferring dockerfile: 30B
+#2 transferring dockerfile: 541B 0.0s done
+#2 DONE 0.2s
+
+#3 [coordinator internal] load build definition from Dockerfile
+#3 transferring dockerfile: 581B 0.1s done
+#3 DONE 0.2s
+
+#4 [canonical-store internal] load build definition from Dockerfile
+#4 transferring dockerfile: 603B 0.0s done
+#4 DONE 0.2s
+
+#5 [bnpb internal] load build definition from Dockerfile
+#5 transferring dockerfile: 1.47kB 0.0s done
+#5 DONE 0.2s
+
+#6 [field-notifier internal] load build definition from Dockerfile
+#6 transferring dockerfile: 527B 0.0s done
+#6 DONE 0.2s
+
+#7 [bnpb internal] load metadata for docker.io/library/golang:1.26-alpine
+#7 ...
+
+#8 [pvmbg internal] load build definition from Dockerfile
+#8 transferring dockerfile: 497B 0.0s done
+#8 DONE 0.2s
+
+#9 [dashboard-updater internal] load build definition from Dockerfile
+#9 transferring dockerfile: 624B 0.0s done
+#9 DONE 0.2s
+
+#10 [auth internal] load build definition from Dockerfile
+#10 transferring dockerfile: 777B 0.0s done
+#10 DONE 0.2s
+
+#11 [bmkg internal] load build definition from Dockerfile
+#11 transferring dockerfile: 477B 0.0s done
+#11 DONE 0.2s
+
+#12 [notifier internal] load build definition from Dockerfile
+#12 transferring dockerfile: 584B 0.0s done
+#12 DONE 0.2s
+
+#13 [client-api internal] load build definition from Dockerfile
+#13 transferring dockerfile: 941B 0.0s done
+#13 DONE 0.2s
+
+#7 [client-api internal] load metadata for docker.io/library/golang:1.26-alpine
+#7 ...
+
+#14 [field-notifier internal] load metadata for docker.io/library/alpine:3.22
+#14 DONE 2.3s
+
+#15 [field-notifier internal] load metadata for docker.io/library/golang:1.24-alpine
+#15 ...
+
+#7 [bnpb internal] load metadata for docker.io/library/golang:1.26-alpine
+#7 DONE 2.8s
+
+#16 [dashboard-updater internal] load build context
+#16 DONE 0.0s
+
+#17 [client-api internal] load build context
+#17 DONE 0.0s
+
+#18 [pvmbg internal] load build context
+#18 DONE 0.0s
+
+#19 [notifier internal] load build context
+#19 DONE 0.0s
+
+#20 [auth internal] load build context
+#20 DONE 0.0s
+
+#21 [bmkg internal] load build context
+#21 DONE 0.0s
+
+#22 [bnpb internal] load build context
+#22 DONE 0.0s
+
+#23 [field-report-consumer internal] load .dockerignore
+#23 transferring context: 2B done
+#23 DONE 0.1s
+
+#23 [ingest-pipeline internal] load .dockerignore
+#23 DONE 0.1s
+
+#24 [bnpb stage-1 1/4] FROM docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#24 resolve docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f 0.1s done
+#24 DONE 0.1s
+
+#25 [bnpb builder 1/6] FROM docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab
+#25 resolve docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab 0.1s done
+#25 DONE 0.4s
+
+#26 [dashboard-updater builder 2/6] WORKDIR /src
+#26 ...
+
+#18 [pvmbg internal] load build context
+#18 transferring context: 16.12kB 0.0s done
+#18 DONE 0.5s
+
+#16 [dashboard-updater internal] load build context
+#16 transferring context: 9.81kB 0.1s done
+#16 DONE 0.6s
+
+#27 [field-report-consumer internal] load build context
+#27 transferring context: 42.72kB 0.0s done
+#27 DONE 0.6s
+
+#21 [bmkg internal] load build context
+#21 transferring context: 48.32kB 0.1s done
+#21 DONE 0.6s
+
+#22 [bnpb internal] load build context
+#22 transferring context: 450.89kB 0.2s done
+#22 DONE 0.7s
+
+#17 [client-api internal] load build context
+#17 transferring context: 108.57kB 0.2s done
+#17 DONE 0.8s
+
+#20 [auth internal] load build context
+#20 transferring context: 69.36kB 0.1s done
+#20 DONE 0.8s
+
+#19 [notifier internal] load build context
+#19 transferring context: 9.26kB 0.0s done
+#19 DONE 0.9s
+
+#28 [bnpb builder  2/12] WORKDIR /src/services/bnpb
+#28 DONE 0.6s
+
+#29 [pvmbg builder 2/6] WORKDIR /app
+#29 DONE 0.6s
+
+#26 [dashboard-updater builder 2/6] WORKDIR /src
+#26 DONE 0.6s
+
+#30 [auth builder 2/8] WORKDIR /src/auth
+#30 DONE 0.7s
+
+#31 [client-api builder  2/10] WORKDIR /src/services/client-api
+#31 DONE 0.7s
+
+#15 [canonical-store internal] load metadata for docker.io/library/golang:1.24-alpine
+#15 DONE 4.0s
+
+#32 [field-notifier internal] load .dockerignore
+#32 ...
+
+#33 [bnpb builder  3/12] COPY services/bmkg/go.mod services/bmkg/go.sum /src/services/bmkg/
+#33 DONE 0.5s
+
+#34 [bnpb builder  4/12] COPY libs/observability/go.mod /src/libs/observability/
+#34 ...
+
+#35 [client-api builder  3/10] COPY libs/observability/go.mod /src/libs/observability/
+#35 DONE 0.6s
+
+#36 [bmkg builder 3/6] COPY go.mod go.sum ./
+#36 DONE 0.7s
+
+#37 [dashboard-updater builder 3/6] COPY go.mod ./
+#37 DONE 0.7s
+
+#38 [pvmbg builder 3/6] COPY go.mod go.sum ./
+#38 DONE 0.8s
+
+#39 [ingest-pipeline builder 3/6] COPY go.mod go.sum ./
+#39 DONE 0.8s
+
+#40 [notifier builder 3/6] COPY go.mod ./
+#40 DONE 0.8s
+
+#41 [notifier builder 4/6] RUN go mod download
+#41 ...
+
+#42 [auth builder 3/8] COPY auth/go.mod auth/go.sum ./
+#42 DONE 0.9s
+
+#32 [field-notifier internal] load .dockerignore
+#32 transferring context: 129B 0.0s done
+#32 DONE 0.8s
+
+#43 [canonical-store internal] load build context
+#43 DONE 0.0s
+
+#44 [field-notifier internal] load build context
+#44 DONE 0.0s
+
+#45 [coordinator internal] load build context
+#45 DONE 0.0s
+
+#34 [bnpb builder  4/12] COPY libs/observability/go.mod /src/libs/observability/
+#34 DONE 0.7s
+
+#24 [coordinator stage-1 1/4] FROM docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#24 resolve docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f 0.1s done
+#24 ...
+
+#46 [coordinator build 1/6] FROM docker.io/library/golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191
+#46 resolve docker.io/library/golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191 0.2s done
+#46 DONE 0.3s
+
+#24 [bmkg stage-1 1/4] FROM docker.io/library/alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+#24 CACHED
+
+#46 [field-notifier build 1/6] FROM docker.io/library/golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191
+#46 ...
+
+#47 [client-api builder  4/10] COPY services/shared/go.mod services/shared/go.sum /src/services/shared/
+#47 DONE 0.7s
+
+#48 [client-api builder  5/10] COPY services/client-api/go.mod services/client-api/go.sum ./
+#48 ...
+
+#49 [auth builder 4/8] COPY shared/go.mod shared/go.sum /src/shared/
+#49 DONE 0.8s
+
+#50 [auth builder 5/8] RUN go mod download
+#50 ...
+
+#51 [bnpb builder  5/12] COPY services/shared/go.mod services/shared/go.sum /src/services/shared/
+#51 DONE 0.8s
+
+#43 [canonical-store internal] load build context
+#43 transferring context: 47.65kB 0.1s done
+#43 DONE 0.9s
+
+#48 [client-api builder  5/10] COPY services/client-api/go.mod services/client-api/go.sum ./
+#48 DONE 0.7s
+
+#44 [field-notifier internal] load build context
+#44 transferring context: 27.86kB 0.1s done
+#44 DONE 0.9s
+
+#45 [coordinator internal] load build context
+#45 transferring context: 47.89kB 0.1s done
+#45 DONE 1.0s
+
+#52 [client-api builder  6/10] RUN go mod download
+#52 ...
+
+#53 [bnpb builder  6/12] COPY services/bnpb/go.mod services/bnpb/go.sum ./
+#53 DONE 0.3s
+
+#54 [bnpb builder  7/12] RUN go mod download
+#54 ...
+
+#55 [canonical-store stage-1 2/4] RUN apk add --no-cache ca-certificates && addgroup -S app && adduser -S -G app app && mkdir -p /data && chown app:app /data
+#55 0.890 fetch https://dl-cdn.alpinelinux.org/alpine/v3.22/main/x86_64/APKINDEX.tar.gz
+#55 1.862 fetch https://dl-cdn.alpinelinux.org/alpine/v3.22/community/x86_64/APKINDEX.tar.gz
+#55 3.553 (1/1) Installing ca-certificates (20261020-r0)
+#55 4.242 Executing busybox-1.37.0-r20.trigger
+#55 4.257 Executing ca-certificates-20261020-r0.trigger
+#55 4.293 OK: 8 MiB in 17 packages
+#55 DONE 4.5s
+
+#56 [coordinator stage-1 3/4] WORKDIR /app
+#56 DONE 0.1s
+
+#46 [coordinator build 1/6] FROM docker.io/library/golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191
+#46 sha256:c95d909b2488ff78a51d01ca745429e6d281e314006f231fe6e9f219cf5432ca 126B / 126B 0.7s done
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 2.10MB / 79.13MB 3.3s
+#46 sha256:8f78851c25d251496dd39ebce311b4d914a4a97c0ba1983039165a05fd96b925 296.08kB / 296.08kB 2.5s done
+#46 sha256:589002ba0eaed121a1dbf42f6648f29e5be55d5c8a6ee0f8eaa0285cc21ac153 0B / 3.86MB 3.2s
+#46 ...
+
+#57 [field-notifier stage-1 2/4] RUN apk add --no-cache ca-certificates && addgroup -S app && adduser -S -G app app
+#57 0.871 fetch https://dl-cdn.alpinelinux.org/alpine/v3.22/main/x86_64/APKINDEX.tar.gz
+#57 1.904 fetch https://dl-cdn.alpinelinux.org/alpine/v3.22/community/x86_64/APKINDEX.tar.gz
+#57 4.229 (1/1) Installing ca-certificates (20261020-r0)
+#57 4.712 Executing busybox-1.37.0-r20.trigger
+#57 4.719 Executing ca-certificates-20261020-r0.trigger
+#57 4.778 OK: 8 MiB in 17 packages
+#57 DONE 5.1s
+
+#46 [coordinator build 1/6] FROM docker.io/library/golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191
+#46 ...
+
+#58 [field-notifier stage-1 3/4] WORKDIR /app
+#58 DONE 0.1s
+
+#46 [coordinator build 1/6] FROM docker.io/library/golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191
+#46 sha256:589002ba0eaed121a1dbf42f6648f29e5be55d5c8a6ee0f8eaa0285cc21ac153 1.05MB / 3.86MB 4.2s
+#46 sha256:589002ba0eaed121a1dbf42f6648f29e5be55d5c8a6ee0f8eaa0285cc21ac153 2.10MB / 3.86MB 7.1s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 6.29MB / 79.13MB 7.5s
+#46 ...
+
+#59 [dashboard-updater builder 4/6] RUN go mod download
+#59 ...
+
+#60 [field-report-consumer builder 4/6] RUN go mod download
+#60 ...
+
+#61 [bmkg builder 4/6] RUN go mod download
+#61 ...
+
+#62 [pvmbg builder 4/6] RUN go mod download
+#62 ...
+
+#46 [coordinator build 1/6] FROM docker.io/library/golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191
+#46 sha256:589002ba0eaed121a1dbf42f6648f29e5be55d5c8a6ee0f8eaa0285cc21ac153 3.15MB / 3.86MB 9.8s
+#46 sha256:589002ba0eaed121a1dbf42f6648f29e5be55d5c8a6ee0f8eaa0285cc21ac153 3.86MB / 3.86MB 11.8s done
+#46 sha256:589002ba0eaed121a1dbf42f6648f29e5be55d5c8a6ee0f8eaa0285cc21ac153 3.86MB / 3.86MB 11.8s done
+#46 extracting sha256:589002ba0eaed121a1dbf42f6648f29e5be55d5c8a6ee0f8eaa0285cc21ac153
+#46 extracting sha256:589002ba0eaed121a1dbf42f6648f29e5be55d5c8a6ee0f8eaa0285cc21ac153 0.2s done
+#46 extracting sha256:8f78851c25d251496dd39ebce311b4d914a4a97c0ba1983039165a05fd96b925 0.1s done
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 8.39MB / 79.13MB 12.6s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 11.53MB / 79.13MB 17.7s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 14.68MB / 79.13MB 22.8s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 18.87MB / 79.13MB 25.6s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 23.07MB / 79.13MB 28.9s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 27.26MB / 79.13MB 31.9s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 31.46MB / 79.13MB 34.3s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 35.65MB / 79.13MB 37.3s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 39.85MB / 79.13MB 41.2s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 44.04MB / 79.13MB 45.6s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 48.23MB / 79.13MB 50.1s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 52.43MB / 79.13MB 53.8s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 56.62MB / 79.13MB 58.6s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 60.82MB / 79.13MB 63.3s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 65.01MB / 79.13MB 66.9s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 69.21MB / 79.13MB 70.2s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 73.40MB / 79.13MB 75.1s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 77.59MB / 79.13MB 78.4s
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 79.13MB / 79.13MB 80.2s done
+#46 sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 79.13MB / 79.13MB 80.2s done
+#46 extracting sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581
+#46 extracting sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 3.4s done
+#46 extracting sha256:f7bdfd728ac2ad72d43b82689890dc698260d3a1049845f48fb3fb942df6c581 3.4s done
+#46 extracting sha256:c95d909b2488ff78a51d01ca745429e6d281e314006f231fe6e9f219cf5432ca 0.0s done
+#46 extracting sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1 0.0s done
+#46 DONE 85.4s
+
+#63 [canonical-store build 2/6] WORKDIR /src
+#63 DONE 2.4s
+
+#64 [coordinator build 3/6] COPY libs/observability ./libs/observability
+#64 DONE 0.1s
+
+#65 [field-notifier build 3/6] COPY libs/observability ./libs/observability
+#65 CACHED
+
+#66 [coordinator build 3/6] COPY libs/observability ./libs/observability
+#66 CACHED
+
+#67 [coordinator build 4/6] COPY services/coordinator ./services/coordinator
+#67 DONE 0.1s
+
+#68 [field-notifier build 4/6] COPY services/field-notifier ./services/field-notifier
+#68 DONE 0.1s
+
+#69 [canonical-store build 4/6] COPY services/canonical-store ./services/canonical-store
+#69 DONE 0.1s
+
+#70 [coordinator build 5/6] WORKDIR /src/services/coordinator
+#70 DONE 0.1s
+
+#71 [field-notifier build 5/6] WORKDIR /src/services/field-notifier
+#71 DONE 0.1s
+
+#72 [canonical-store build 5/6] WORKDIR /src/services/canonical-store
+#72 DONE 0.1s
+
+#73 [coordinator build 6/6] RUN CGO_ENABLED=0 go build -trimpath -o /out/coordinator .
+#73 ...
+
+#74 [field-notifier build 6/6] RUN CGO_ENABLED=0 go build -trimpath -o /out/field-notifier .
+#74 ...
+
+#75 [canonical-store build 6/6] RUN CGO_ENABLED=0 go build -trimpath -o /out/canonical-store .
+#75 ...
+
+#52 [client-api builder  6/10] RUN go mod download
+#52 DONE 104.4s
+
+#76 [client-api builder  7/10] COPY libs/observability /src/libs/observability
+#76 DONE 1.4s
+
+#54 [bnpb builder  7/12] RUN go mod download
+#54 ...
+
+#77 [client-api builder  8/10] COPY services/shared /src/services/shared
+#77 DONE 0.5s
+
+#54 [bnpb builder  7/12] RUN go mod download
+#54 ...
+
+#50 [auth builder 5/8] RUN go mod download
+#50 DONE 107.0s
+
+#78 [client-api builder  9/10] COPY services/client-api/ ./
+#78 DONE 0.4s
+
+#79 [auth builder 6/8] COPY auth/ ./
+#79 DONE 2.2s
+
+#80 [client-api builder 10/10] RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/client-api .
+#80 ...
+
+#81 [auth builder 7/8] COPY shared/ /src/shared/
+#81 DONE 0.3s
+
+#82 [auth builder 8/8] RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/auth .
+#82 ...
+
+#62 [pvmbg builder 4/6] RUN go mod download
+#62 DONE 115.7s
+
+#83 [pvmbg builder 5/6] COPY *.go schema.sql ./
+#83 DONE 2.0s
+
+#41 [notifier builder 4/6] RUN go mod download
+#41 ...
+
+#84 [pvmbg builder 6/6] RUN CGO_ENABLED=0 GOOS=linux go build -o pvmbg .
+#84 ...
+
+#59 [dashboard-updater builder 4/6] RUN go mod download
+#59 DONE 141.4s
+
+#61 [bmkg builder 4/6] RUN go mod download
+#61 DONE 141.4s
+
+#85 [bmkg builder 5/6] COPY . .
+#85 ...
+
+#86 [dashboard-updater builder 5/6] COPY . ./
+#86 DONE 2.3s
+
+#85 [bmkg builder 5/6] COPY . .
+#85 DONE 2.4s
+
+#87 [bmkg builder 6/6] RUN CGO_ENABLED=0 GOOS=linux go build -o bmkg .
+#87 ...
+
+#88 [dashboard-updater builder 6/6] RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/dashboard-updater .
+#88 ...
+
+#41 [notifier builder 4/6] RUN go mod download
+#41 DONE 158.0s
+
+#89 [notifier builder 5/6] COPY . ./
+#89 DONE 1.3s
+
+#80 [client-api builder 10/10] RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/client-api .
+#80 ...
+
+#90 [notifier builder 6/6] RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/notifier .
+#90 ...
+
+#74 [field-notifier build 6/6] RUN CGO_ENABLED=0 go build -trimpath -o /out/field-notifier .
+#74 DONE 84.5s
+
+#75 [canonical-store build 6/6] RUN CGO_ENABLED=0 go build -trimpath -o /out/canonical-store .
+#75 DONE 84.6s
+
+#54 [bnpb builder  7/12] RUN go mod download
+#54 ...
+
+#73 [coordinator build 6/6] RUN CGO_ENABLED=0 go build -trimpath -o /out/coordinator .
+#73 DONE 84.9s
+
+#91 [canonical-store stage-1 4/4] COPY --from=build /out/canonical-store ./canonical-store
+#91 ...
+
+#92 [field-notifier stage-1 4/4] COPY --from=build /out/field-notifier ./field-notifier
+#92 DONE 1.0s
+
+#91 [canonical-store stage-1 4/4] COPY --from=build /out/canonical-store ./canonical-store
+#91 DONE 1.1s
+
+#93 [coordinator stage-1 4/4] COPY --from=build /out/coordinator ./coordinator
+#93 DONE 1.0s
+
+#94 [canonical-store] exporting to image
+#94 exporting layers
+#94 ...
+
+#54 [bnpb builder  7/12] RUN go mod download
+#54 DONE 174.4s
+
+#95 [bnpb builder  8/12] COPY libs/observability /src/libs/observability
+#95 DONE 4.9s
+
+#96 [coordinator] exporting to image
+#96 ...
+
+#97 [bnpb builder  9/12] COPY services/shared /src/services/shared
+#97 DONE 0.5s
+
+#96 [coordinator] exporting to image
+#96 exporting layers 6.7s done
+#96 exporting manifest sha256:48b9988ff72a63d91f447fac47a31e963ed8c5dd2f4c841d303a34e81fc1de16 0.1s done
+#96 exporting config sha256:0336e057ea5f24dd8dcbbf8088005df942cd136a83d45bce49dcfe103a3f9b80 0.3s done
+#96 exporting attestation manifest sha256:72a825c09df27dec5d3377adaa6953362cb13ea44a7ea59f8006d6674ec418f7
+#96 exporting attestation manifest sha256:72a825c09df27dec5d3377adaa6953362cb13ea44a7ea59f8006d6674ec418f7 0.2s done
+#96 exporting manifest list sha256:4ee5c3b3e7b12db7c6ebedaf08f7fe8bd08444a53beab66a4656ad8f7c88e7bd
+#96 exporting manifest list sha256:4ee5c3b3e7b12db7c6ebedaf08f7fe8bd08444a53beab66a4656ad8f7c88e7bd 0.4s done
+#96 ...
+
+#98 [bnpb builder 10/12] COPY services/bmkg/proto /src/services/bmkg/proto
+#98 DONE 0.8s
+
+#96 [coordinator] exporting to image
+#96 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-coordinator:latest 0.1s done
+#96 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-coordinator:latest
+#96 ...
+
+#99 [bnpb builder 11/12] COPY services/bnpb/ ./
+#99 DONE 0.5s
+
+#100 [bnpb builder 12/12] RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/bnpb .     && CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/canonical-admin ./cmd/canonical-admin     && CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/canonical-api ./cmd/canonical-api
+#100 ...
+
+#101 [field-notifier] exporting to image
+#101 exporting layers 6.9s done
+#101 exporting manifest sha256:705db7581c4aec574e72d4a5399f999558a4a25cd4632d4e88f173c9cd03d99a 0.2s done
+#101 exporting config sha256:9c45361600bb30ae358529e73ca906044fdc6013a173e82b75d758332725d0ad 0.2s done
+#101 exporting attestation manifest sha256:e9fd9804c807a899bd68e269632d6fac6416f06db61d8f493d9bf347f70f95a2 0.2s done
+#101 exporting manifest list sha256:730dc431a988678ff1c448697b73256a3a77e620886452ba07fe371f66baade7 0.4s done
+#101 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-field-notifier:latest 0.0s done
+#101 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-field-notifier:latest 1.4s done
+#101 DONE 9.7s
+
+#96 [coordinator] exporting to image
+#96 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-coordinator:latest 1.5s done
+#96 DONE 9.7s
+
+#94 [canonical-store] exporting to image
+#94 exporting layers 6.7s done
+#94 exporting manifest sha256:e00fedc152b9db93a672644819de9aa7803e170dd59856cdcacc78643290b9bf 0.1s done
+#94 exporting config sha256:bf1def433c53edde633caec0004d1869568af8ff95e82032fffad82423105b73 0.3s done
+#94 exporting attestation manifest sha256:0655b9c00124ca9dc7561a470447c7f98f2c9592d5a649cd1d11178648ad7438 0.2s done
+#94 exporting manifest list sha256:0303acfd949adc28233a2a6d4f83cb2a67f5a9e327c421ee80eecfc114337919 0.4s done
+#94 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-canonical-store:latest 0.0s done
+#94 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-canonical-store:latest 1.6s done
+#94 DONE 10.0s
+
+#87 [bmkg builder 6/6] RUN CGO_ENABLED=0 GOOS=linux go build -o bmkg .
+#87 ...
+
+#102 [coordinator] resolving provenance for metadata file
+#102 DONE 0.7s
+
+#103 [canonical-store] resolving provenance for metadata file
+#103 DONE 0.2s
+
+#104 [field-notifier] resolving provenance for metadata file
+#104 DONE 0.7s
+
+#88 [dashboard-updater builder 6/6] RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/dashboard-updater .
+#88 ...
+
+#60 [ingest-pipeline builder 4/6] RUN go mod download
+#60 DONE 187.9s
+
+#60 [field-report-consumer builder 4/6] RUN go mod download
+#60 DONE 187.9s
+
+#105 [ingest-pipeline builder 5/6] COPY . ./
+#105 DONE 0.8s
+
+#88 [dashboard-updater builder 6/6] RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/dashboard-updater .
+#88 ...
+
+#105 [field-report-consumer builder 5/6] COPY . ./
+#105 DONE 0.8s
+
+#106 [ingest-pipeline builder 6/6] RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/ingest-pipeline .

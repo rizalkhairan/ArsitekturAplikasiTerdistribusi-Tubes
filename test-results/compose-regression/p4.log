@@ -1,0 +1,127 @@
+ Container arsitekturaplikasiterdistribusi-tubes-canonical-contract-stub-1 Recreate 
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-mock-1 Recreate 
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-mock-1 Recreated 
+ Container arsitekturaplikasiterdistribusi-tubes-canonical-contract-stub-1 Recreated 
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-mock-1 Starting 
+ Container arsitekturaplikasiterdistribusi-tubes-canonical-contract-stub-1 Starting 
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-mock-1 Started 
+ Container arsitekturaplikasiterdistribusi-tubes-canonical-contract-stub-1 Started 
+ Image arsitekturaplikasiterdistribusi-tubes-satellite-processor Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 780B done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 979B 0.0s done
+#2 DONE 0.1s
+
+#3 [internal] load metadata for docker.io/library/golang:1.26-alpine
+#3 DONE 1.9s
+
+#4 [internal] load metadata for gcr.io/distroless/static-debian12:nonroot
+#4 DONE 1.9s
+
+#5 [internal] load .dockerignore
+#5 transferring context: 135B 0.0s done
+#5 DONE 0.1s
+
+#6 [stage-1 1/6] FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+#6 resolve gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab 0.1s done
+#6 DONE 0.1s
+
+#7 [internal] load build context
+#7 transferring context: 84.45kB 0.1s done
+#7 DONE 0.1s
+
+#8 [build  1/10] FROM docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab
+#8 resolve docker.io/library/golang:1.26-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab 0.1s done
+#8 DONE 0.1s
+
+#9 [build  2/10] WORKDIR /src
+#9 CACHED
+
+#10 [build  3/10] COPY shared/go.mod shared/go.sum ./shared/
+#10 DONE 0.1s
+
+#11 [build  4/10] COPY satellite-processor/go.mod satellite-processor/go.sum ./satellite-processor/
+#11 DONE 0.1s
+
+#12 [build  5/10] WORKDIR /src/satellite-processor
+#12 DONE 0.1s
+
+#13 [build  6/10] RUN go mod download
+#13 DONE 35.5s
+
+#14 [build  7/10] COPY shared/ /src/shared/
+#14 DONE 0.4s
+
+#15 [build  8/10] COPY satellite-processor/ ./
+#15 DONE 0.2s
+
+#16 [build  9/10] RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/satellite-processor .
+#16 DONE 84.5s
+
+#17 [build 10/10] RUN mkdir -p /out/data /out/config && touch /out/data/.keep && chmod 0750 /out/data /out/config && chown -R 65532:65532 /out/data /out/config
+#17 DONE 1.1s
+
+#18 [stage-1 2/6] WORKDIR /app
+#18 CACHED
+
+#19 [stage-1 3/6] COPY --from=build --chown=nonroot:nonroot /out/satellite-processor /app/satellite-processor
+#19 DONE 0.3s
+
+#20 [stage-1 4/6] COPY --from=build --chown=nonroot:nonroot /out/data/ /app/data/
+#20 DONE 0.1s
+
+#21 [stage-1 5/6] COPY --from=build --chown=nonroot:nonroot /out/config/ /app/config/
+#21 DONE 0.1s
+
+#22 [stage-1 6/6] COPY --chown=nonroot:nonroot satellite-processor/testdata/ /app/config/
+#22 DONE 0.1s
+
+#23 exporting to image
+#23 exporting layers
+#23 exporting layers 1.2s done
+#23 exporting manifest sha256:4250e8c4d20835430f983ddd6df0d69b3a2af4387783c730c0344c990280808c 0.0s done
+#23 exporting config sha256:cd15e3a1abd666565fda674d325e5bd8f0ad0a59d0844d0cd8db5c85e92b3a48 0.0s done
+#23 exporting attestation manifest sha256:c12b69ae4c10bc706684699dd9b1c80be9c971b3abf7c65b904bb2fbdf2fe6bd
+#23 exporting attestation manifest sha256:c12b69ae4c10bc706684699dd9b1c80be9c971b3abf7c65b904bb2fbdf2fe6bd 0.1s done
+#23 exporting manifest list sha256:25187b1ec48c4199902e63f0254fcaa6a3124b5bb3c8763b8db9c0e49c14ae7e 0.0s done
+#23 naming to docker.io/library/arsitekturaplikasiterdistribusi-tubes-satellite-processor:latest done
+#23 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-satellite-processor:latest
+#23 unpacking to docker.io/library/arsitekturaplikasiterdistribusi-tubes-satellite-processor:latest 0.3s done
+#23 DONE 1.9s
+
+#24 resolving provenance for metadata file
+#24 DONE 0.3s
+ Image arsitekturaplikasiterdistribusi-tubes-satellite-processor Built 
+ Container arsitekturaplikasiterdistribusi-tubes-canonical-contract-stub-1 Running 
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-mock-1 Running 
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-processor-1 Recreate 
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-processor-1 Recreated 
+ Container arsitekturaplikasiterdistribusi-tubes-canonical-contract-stub-1 Waiting 
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-mock-1 Waiting 
+ Container arsitekturaplikasiterdistribusi-tubes-canonical-contract-stub-1 Healthy 
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-mock-1 Healthy 
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-processor-1 Starting 
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-processor-1 Started 
+PASS: P4.1 exact-key dedupe, confidence filter, cross-satellite cluster, singleton count, wildfire mapping
+PASS: P4.2 event-time grouping; within-lateness updates; beyond-lateness retained and counted
+PASS: P4.3 update, shrinking fire, and disappearance use versioned mutations on one fire identity
+PASS: P4.4 400-event 60x-style burst caught up in 14s; max_sampled_backlog=64; p95=4.494168329s
+P4.5 kill after durable offset=412 processed=412
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-processor-1 Killing 
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-processor-1 Killed 
+ Container arsitekturaplikasiterdistribusi-tubes-canonical-contract-stub-1 Running 
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-mock-1 Running 
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-mock-1 Waiting 
+ Container arsitekturaplikasiterdistribusi-tubes-canonical-contract-stub-1 Waiting 
+ Container arsitekturaplikasiterdistribusi-tubes-canonical-contract-stub-1 Healthy 
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-mock-1 Healthy 
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-processor-1 Starting 
+ Container arsitekturaplikasiterdistribusi-tubes-satellite-processor-1 Started 
+PASS: P4.5 SIGKILL/restart resumes from durable offset and produces one final fire
+PASS: P4.8 forced disconnect resumes contiguously and reaches latest offset
+SKIP: P4.6 BLOCKED: assistant comparison requires P4_REFERENCE_FILE from the exam/reference result
+SKIP: P4.7 BLOCKED here: run --live (starting a local processor) or --live-external (observing the deployed processor)
+P4 local checks completed; P4.6/P4.7 require the external reference/session or --live-external.

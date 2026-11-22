@@ -54,6 +54,91 @@ Secret `bnpb-secrets`/`bnpb-citus-*`. Variabel penting: `STORAGE_URL`,
 
 ---
 
+### Kubernetes P3/P4 test runners
+
+Start with [the P3/P4 handoff guide](tools/P3-P4-KUBERNETES.md). It documents
+one-time private configuration, readiness mode, official resource contracts,
+required cluster permissions, cleanup, and evidence locations.
+
+Run both currently implemented Kubernetes suites with **one command**:
+
+```bash
+bash tools/p3-p4-kubernetes-test.sh
+```
+
+The combined runner prints to the terminal and saves every run under
+`test-results/p3-p4-<UTC timestamp>-<process id>/`. This includes early
+prerequisite failures. Read `summary.md` for PASS/FAILED/BLOCKED and the exit
+code, `console.log` for the complete output, and stage logs plus `p3/` and `p4/`
+for evidence if those stages were reached. `test-results/latest-run.txt`
+contains the latest run directory. Keep these local evidence files for review;
+they may contain application payloads. The output directory is available to git;
+review its contents before sharing.
+
+Prerequisites: the demo cluster is deployed, `kubectl` has the correct context
+(`KUBECONFIG` if needed), the satellite feed is running, and Bash, kubectl, curl,
+jq, Go, and GNU shell tools are installed. The command runs P3 first, then the
+180-second P4 live check, stops on failures, and saves console output plus pod
+evidence in one timestamped `test-results/p3-p4-*` directory. It temporarily
+interrupts application services. It does not start an official exam session.
+Before official acceptance, source a private copy of
+`tools/p4-acceptance.env.example` with your cluster, official reference file and
+official workload adapter paths. Missing files cause exit 2 (`BLOCKED`) before
+P3 disrupts services. The adapter must write the real burst-end timestamp,
+speed 60 and final feed offset to `$P4_LOAD_RECEIPT`; catch-up is timed from
+that timestamp. The reference must describe the same completed feed session.
+The runner never starts an exam session automatically.
+
+Controlled P4 now clones the deployed image/configuration into a temporary
+processor with its own PVC and mock SSE source, retaining the real canonical
+write API. It executes P4.1–P4.5/P4.8 assertions and compares the entire recovered
+fire projection against uninterrupted replay. Temporary fixture resources are
+deleted afterward; synthetic canonical events remain identifiable by detection
+keys and are excluded from official comparison. Run on a rehearsal/demo cluster.
+Official P4.4 measures the supplied workload, records backlog/p95, and enforces
+60-second recovery. P4.6 traverses every Audit API page, rejects partial results,
+and saves a complete field diff against the supplied reference. A difference
+fails the run and must be investigated and explained in the report.
+These scripts have not yet been validated against your actual Kubernetes cluster.
+
+Run from Bash at the repository root with `KUBECONFIG` pointing to the demo
+cluster. These commands deliberately affect application availability; run them
+in a rehearsal window, before starting the official recording/feed session.
+Do not run Compose tests concurrently on the same local ports.
+
+```bash
+export KUBECONFIG=/path/to/demo-kubeconfig
+kubectl config current-context
+kubectl get nodes -o wide
+
+# Requires kubectl, curl, jq, Go, GNU shell tools; reads named tokens from
+# bnpb-secrets. Override FIELD_USER_PASSWORD/MEDIA_USER_PASSWORD if changed.
+bash tools/p3-kubernetes-test.sh
+
+# Live feed must already be running. Captures three minutes by default.
+P4_LIVE_SECONDS=180 bash tools/p4-kubernetes-test.sh
+```
+
+P3 reuses the existing acceptance assertions with Kubernetes outage/log/restart
+operations, auto port-forwards, replica restoration, and saved pod logs. It also
+kills the receiving ingest API after acknowledged reports while the consumer is
+stopped, retries an accepted request, and verifies the receipt remains stable.
+Go builds the poison producer for the cluster architecture; the Kafka container
+must permit copying/executing this temporary helper. Failures are explicit.
+
+P4 includes controlled fixtures, live capture and official acceptance checks.
+It observes the deployed processor, saves status/logs, and times official catch-up
+from the burst-end timestamp supplied by the workload adapter, requiring the
+target offset processed and canonical writes delivered within 60 seconds.
+Reference comparison and official burst checks require the reference/workload
+paths described above; missing resources block acceptance.
+The local Compose P4 suite still provides the controlled rehearsal scenarios.
+
+Standalone evidence is saved under `test-results/p3-k8s-*` or `test-results/p4-k8s-*`.
+These runners require validation on the actual cluster; shell syntax validation
+alone does not establish acceptance. P3's access assertion retains the current
+policy: Audit sees failure metadata, while raw payload/replay require Ops.
+
 ## 1. Arsitektur
 
 ```
